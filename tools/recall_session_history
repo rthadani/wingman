@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: recall_session_history FILE [QUERY]" >&2
+  exit 1
+fi
+
+file=$1
+shift
+
+if [ ! -f "$file" ]; then
+  echo "no such file: $file" >&2
+  exit 1
+fi
+
+if [ $# -gt 0 ]; then
+  grep -i -- "$1" "$file" || true
+else
+  cat "$file"
+fi

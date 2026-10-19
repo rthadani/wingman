@@ -1,0 +1,13 @@
+[Unit]
+Description=Wingman capture client
+
+[Service]
+ExecStart=/usr/bin/java -jar %h/capture-client/capture-client.jar
+Environment=AGENT_URL=http://localhost:7777
+Environment=CAPTURE_PORT=7778
+Environment=CAPTURE_DEVICES=
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

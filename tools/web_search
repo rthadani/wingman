@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -lt 1 ]; then
+  echo "usage: web_search QUERY" >&2
+  exit 1
+fi
+
+q=$(printf '%s' "$*" | sed -e 's/ /%20/g' -e 's/&/%26/g' -e 's/?/%3F/g')
+
+curl -sL --max-time 20 "https://html.duckduckgo.com/html/?q=$q" \
+  | sed -e 's/<script[^>]*>[^<]*<\/script>//g' -e 's/<[^>]*>/ /g' \
+  | tr -s ' \t' ' ' \
+  | grep -v '^ *$' \
+  | head -40

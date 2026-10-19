@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ $# -lt 2 ]; then
+  echo "usage: search_transcript FILE QUERY" >&2
+  exit 1
+fi
+
+file=$1
+query=$2
+
+if [ ! -f "$file" ]; then
+  echo "no such file: $file" >&2
+  exit 1
+fi
+
+grep -i -n -- "$query" "$file" || true

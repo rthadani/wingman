@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.wingman.capture-client</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/java</string>
+        <string>-jar</string>
+        <string>/usr/local/lib/capture-client/capture-client.jar</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AGENT_URL</key>
+        <string>http://localhost:7777</string>
+        <key>CAPTURE_PORT</key>
+        <string>7778</string>
+        <key>CAPTURE_DEVICES</key>
+        <string></string>
+    </dict>
+</dict>
+</plist>

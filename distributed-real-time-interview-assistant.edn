@@ -1,0 +1,90 @@
+{:objective
+ "Phase 1 — Skeleton and deps
+Deliverables: deps.edn (with :test and :run aliases), src/interview/core.clj, src/interview/server.clj, src/interview/config.clj, src/interview/handlers.clj, src/interview/system.clj, test/interview/core_test.clj
+
+Scaffold the full project tree. deps.edn pulls http-kit 2.8.0, reitit 0.7.2, hiccup 2.0.0-RC4, core.async 1.7.701, cheshire 5.13.0. Use http-kit's own client (org.httpkit.client) for all outbound HTTP calls; do not add clj-http or any second HTTP client library. Declare :test alias invoking cognitect.test-runner and :run alias invoking interview.core/-main. Declare all namespaces with correct :require blocks but stub every function body with an ex-info not-implemented throw. interview.core: -main, start-system [cfg], stop-system [sys]. interview.server: make-routes [sys], start-server [cfg routes], stop-server [srv]. interview.config: load-config [], require-env [var-name]. interview.handlers: handle-audio-upload [req], handle-chat [req], handle-sse [req], handle-session-list [req], handle-session-get [req]. interview.system: build-system [cfg] assembles component map with keys :server :session-store :sse-registry; start-system [sys] starts all components; stop-system [sys] stops all components. core_test.clj: start-stop-test verifies build-system returns a map with :server key.
+
+Phase 2 — Mockup HTML visual reference
+Deliverables: output/mockup.html, test/interview/mockup_lint.sh
+
+Static single-file HTML using Tailwind Play CDN and htmx CDN. Three-column layout: sessions sidebar (left, 260px fixed), transcript panel (center, flex-grow), assistant panel (right, 360px fixed). Transcript panel shows utterances as stacked cards with speaker label and timestamp. Assistant panel shows streaming response with a blinking cursor indicator. Bottom bar shows audio status dot (recording/idle) and session timer. No JavaScript logic beyond htmx attributes. Pixel-reference only, not wired to the server.
+
+Phase 3 — Capture client
+Deliverables: src/interview/capture.clj, src/interview/whisper.clj, resources/public/capture.js, test/interview/capture_test.clj
+
+capture.js uses MediaRecorder (audio/webm;codecs=opus, 500ms timeslice) and POSTs binary chunks to /api/session/:id/audio. interview.capture: process-audio-chunk [session-id chunk-bytes] writes chunk bytes to a temp file, calls interview.whisper/transcribe, returns {:text str :duration-ms int}; start-capture-session [session-id] initialises per-session state in component map; stop-capture-session [session-id] flushes any pending chunk and cleans up. interview.whisper: transcribe [wav-file opts] shells out to WHISPER_BIN env var path with --output-json flag, reads stdout, parses JSON via cheshire, returns {:text str :segments [...]}; whisper-available? [] checks WHISPER_BIN env var is set and file exists and is executable. capture_test.clj: whisper-available-false-test asserts whisper-available? returns false when WHISPER_BIN unset; process-chunk-returns-map-test stubs transcribe and asserts process-audio-chunk returns a map with :text key.
+
+Phase 4 — Pi-agent core
+Deliverables: src/interview/agent.clj, src/interview/prompts.clj, test/interview/agent_test.clj
+
+interview.agent: run-pi-turn [cfg context-dir prompt out-ch] shells out to the `pi` CLI binary (PI_BIN env var, defaulting to `pi` on PATH) as a fresh subprocess per turn via java.lang.ProcessBuilder with context-dir as the subprocess working directory, passing prompt via stdin and provider/model flags read from PI_PROVIDER/PI_MODEL env (matching this project's own wiggum :agent :pi :provider :zai :model-id convention — ASSUMPTION: verify actual pi CLI flag names against `pi --help`, placeholders used here); reads subprocess stdout incrementally via a BufferedReader on a separate thread, putting each line onto out-ch as it arrives so partial output can stream to SSE even though each invocation is a fresh, non-daemon process; blocks until the process exits, then returns {:text full-stdout :exit-code int}. format-context [event-log context-dir] writes the relevant rolling window of session events to a context file inside context-dir for pi to read. interview.prompts: system-prompt [ctx] returns the prompt string instructing pi on its persona (interview role/topic from ctx map with :role and :topic keys) and which tool scripts are available in its working directory (see Phase 5) and when to use each, ending with an explicit instruction to emit only the final suggestion (or nothing, if it invoked mark_topic_answered) as the last line of stdout so run-pi-turn's caller can distinguish it from pi's other tool-use chatter; user-prompt [transcript] wraps a transcript snippet into the turn-specific portion of that prompt. agent_test.clj: format-context-test asserts the written context file contains expected transcript text; system-prompt-test asserts the returned prompt string references the tool script names.
+
+Phase 5 — Tool scripts and turn orchestration
+Deliverables: tools/recall_session_history, tools/search_transcript, tools/web_search, tools/mark_topic_answered, src/interview/tools.clj, src/interview/loop.clj, test/interview/tools_test.clj, AGENT.md
+
+Each tools/* file is a standalone executable script (chmod +x; bash or babashka) that `pi`'s own bash tool can invoke directly from its working directory during a turn — no structured function-calling schema is passed to pi at all, since pi already has its own general-purpose tool-use loop and discovers these the same way it would any other script in its working directory. tools/recall_session_history [section-id?] reads the session's event log/compacted summaries (via a path convention documented in AGENT.md) and prints matching context to stdout, or all sections if no section-id given. tools/search_transcript <query> greps raw utterances in the session log and prints matches with surrounding context. tools/web_search <query> performs a web search via an external API (key sourced from its own env var, independent of the pi-agent's own config) and prints results. tools/mark_topic_answered <topic> writes a sentinel marker file (.skip-suggestion) into its working directory rather than printing anything meaningful — since pi has no direct channel back into the Clojure process's session state other than the filesystem of the per-turn working directory it was given, this file is the only signal the orchestrator has that the topic was judged already-covered. interview.tools: stage-tools! [context-dir] copies the four tools/* scripts into a fresh per-turn context-dir so `pi` finds them relative to its working directory for that invocation; skip-marked? [context-dir] checks whether tools/mark_topic_answered wrote its sentinel file during the turn. interview.loop: run-agent-loop [sys cfg session-id event] builds a fresh context-dir via interview.tools/stage-tools!, writes the prompt via interview.agent/format-context + prompts/system-prompt, invokes interview.agent/run-pi-turn as a single blocking subprocess call for this turn (no multi-step tool_call/tool_result loop in Clojure — pi's own internal loop handles calling recall/search/web-search scripts as many times as it needs before producing final output), then checks interview.tools/skip-marked? afterward; returns {:text str :skip? bool}, and archives or deletes context-dir after the turn completes. tools_test.clj: recall-script-test invokes tools/recall_session_history against a fixture session log and asserts an expected substring in stdout; mark-answered-writes-marker-test invokes tools/mark_topic_answered and asserts the sentinel file appears in the target directory.
+AGENT.md: documents each tool script's invocation convention (arguments, stdout contract, exit codes), the mark_topic_answered sentinel-file protocol and why it exists (pi has no other channel back to session state), why tools are plain executable scripts rather than a structured function-calling schema (pi's own bash tool is the dispatch mechanism), and the per-turn subprocess lifecycle — fresh process and fresh context-dir every turn, no persistent daemon, latency accepted as the tradeoff for reusing pi's existing harness instead of a hand-rolled agent loop.
+
+Phase 6 — Session persistence and compaction
+Deliverables: src/interview/session.clj, src/interview/compaction.clj, test/interview/session_test.clj, test/interview/compaction_test.clj, test/fixtures/sample-session.edn
+
+interview.session: create-session [id] writes {:type :session-created :id id :ts ...} map to data/sessions/<id>.edn; load-session [id] slurps file, splits on newlines, reads each EDN form, returns vector of event maps; append-event [id event-map] appends (pr-str event-map) plus newline to session file; list-sessions [] reads data/sessions/ directory, returns vector of {:id str :event-count int :created-at inst} maps derived from first event of each file. interview.compaction: should-compact? [session-id] returns true when event count exceeds 200; compact-session [session-id] reads all events, groups contiguous runs of :transcript and :response events into :summary event maps with merged text, writes result atomically to a temp file then renames over original. test/fixtures/sample-session.edn: 10 representative event maps covering :session-created, :transcript, :response, :note, and :tool-call types. session_test.clj: create-session-test, append-and-load-test, list-sessions-test each using a java.nio.file.Files/createTempDirectory fixture that is deleted after each test. compaction_test.clj: compact-noop-test asserts event count unchanged when under threshold; compact-reduces-test asserts event count reduced when over threshold.
+
+Phase 7 — Renderer HTMX and SSE
+Deliverables: src/interview/renderer.clj, src/interview/sse.clj, resources/public/app.html, test/interview/renderer_test.clj
+
+See output/mockup.html for layout reference. interview.renderer: app-shell [sessions] returns full hiccup2 vector matching output/mockup.html structure; transcript-fragment [utterance] returns hiccup2 vector for a single utterance card div with hx-swap-oob attribute; response-fragment [text done?] returns hiccup2 vector for assistant text span, when done? is true appends a session-save confirmation span with hx-post attribute; session-list-fragment [sessions] returns hiccup2 vector for sidebar ul with per-session li elements and hx-get links. interview.sse: register-client [registry session-id resp-ch] returns updated registry map with resp-ch added to session set; unregister-client [registry session-id resp-ch] returns updated registry map with resp-ch removed; broadcast [registry session-id event-type data] formats SSE wire string (event: ..., data: ..., newline) and puts onto all channels in session set; sse-response [sys req session-id] returns http-kit async channel response with content-type text/event-stream, registers channel in component registry via swap!, sets on-close callback to unregister. test/interview/renderer_test.clj: app-shell-renders-test checks hiccup2 output string contains id transcript-list; transcript-fragment-test checks hx-swap-oob attribute present; response-fragment-done-test checks confirmation span appears when done? is true.
+
+Phase 8 — Docs
+Deliverables: output/how-to-run.md, output/stack.md, test/interview/docs_check.sh
+
+Write operator docs covering prerequisites (Java 21+, whisper.cpp built with CUDA, the `pi` CLI installed and already configured with your provider/model of choice, PI_BIN/PI_PROVIDER/PI_MODEL set accordingly — no direct LLM API key handling exists in this codebase at all, since every suggestion/chat turn shells out to your already-configured pi CLI), wiggum build command, start command (clj -M:run on port 7777), key HTTP routes (/api/session/:id/audio POST, /api/session/:id/chat POST, /api/session/:id/sse GET, /sessions GET, /session/:id GET), and verbatim :success-check. stack.md lists the full technology inventory."
+
+ :project-dir nil
+
+ :acceptance-criteria
+ {:phase-1 "test -f deps.edn && grep -q ':test' deps.edn && grep -q ':run' deps.edn && test -f src/interview/core.clj && test -f src/interview/server.clj && test -f src/interview/config.clj && test -f src/interview/handlers.clj && test -f src/interview/system.clj && test -f test/interview/core_test.clj"
+  :phase-2 "test -f output/mockup.html && test -f test/interview/mockup_lint.sh"
+  :phase-3 "test -f src/interview/capture.clj && test -f src/interview/whisper.clj && test -f resources/public/capture.js && test -f test/interview/capture_test.clj"
+  :phase-4 "test -f src/interview/agent.clj && test -f src/interview/prompts.clj && test -f test/interview/agent_test.clj"
+  :phase-5 "test -f src/interview/tools.clj && test -f src/interview/loop.clj && test -f test/interview/tools_test.clj && test -f AGENT.md && test -x tools/recall_session_history && test -x tools/search_transcript && test -x tools/web_search && test -x tools/mark_topic_answered"
+  :phase-6 "test -f src/interview/session.clj && test -f src/interview/compaction.clj && test -f test/fixtures/sample-session.edn && test -f test/interview/session_test.clj && test -f test/interview/compaction_test.clj"
+  :phase-7 "test -f src/interview/renderer.clj && test -f src/interview/sse.clj && test -f resources/public/app.html && test -f test/interview/renderer_test.clj"
+  :phase-8 "test -f output/how-to-run.md && test -f output/stack.md && test -f test/interview/docs_check.sh"}
+
+ :success-check
+ "test -f deps.edn && test -f src/interview/core.clj && test -f src/interview/server.clj && test -f src/interview/config.clj && test -f src/interview/handlers.clj && test -f src/interview/capture.clj && test -f src/interview/whisper.clj && test -f resources/public/capture.js && test -f src/interview/agent.clj && test -f src/interview/prompts.clj && test -f src/interview/tools.clj && test -f src/interview/loop.clj && test -f AGENT.md && test -x tools/recall_session_history && test -x tools/search_transcript && test -x tools/web_search && test -x tools/mark_topic_answered && test -f src/interview/session.clj && test -f src/interview/compaction.clj && test -f src/interview/renderer.clj && test -f src/interview/sse.clj && test -f resources/public/app.html && test -f output/how-to-run.md && test -f output/stack.md && test -f test/interview/mockup_lint.sh && test -f test/interview/docs_check.sh && clj -M:test"
+
+ :constraints
+ ["PI_BIN, PI_PROVIDER, and PI_MODEL must be read from environment (PI_BIN defaulting to `pi` on PATH) to construct each subprocess invocation of the pi CLI; no direct LLM API call or API key handling exists anywhere in this codebase — all suggestion/chat generation goes through the pi CLI subprocess"
+  "WHISPER_BIN env var must point to a whisper.cpp binary compiled with CUDA support"
+  "All audio transcription uses subprocess calls to whisper.cpp; no JNI bindings"
+  "Session logs are append-only EDN files in data/sessions/; no SQL or NoSQL database"
+  "Server listens on port from PORT env var, defaulting to 7777"
+  "All concurrent coordination uses core.async channels; no Thread/sleep"
+  "Close http-kit server and all open SSE channels on system stop"
+  "Java 21 or higher required"
+  "No frontend build step; all assets served via CDN links or resources/public"]
+
+ :anti-goals
+ ["No WebRTC; use MediaRecorder HTTP POST for audio delivery"
+  "No durable message queue such as Kafka or RabbitMQ; core.async channels only"
+  "No React or ClojureScript; HTMX plus server-rendered hiccup2 only"
+  "No SQL or NoSQL database; EDN append-only logs only"
+  "No Docker in this iteration; bare-metal run instructions only"
+  "No authentication or multi-user access control"
+  "No streaming from whisper.cpp; batch transcribe per audio chunk"
+  "No Tailwind CLI build; Tailwind Play CDN only"
+  "http-kit's own client (org.httpkit.client), if used at all, is only for the SSE/HTTP server layer and any tool script's own external calls (e.g. web_search) — never for LLM communication, which goes through the pi CLI subprocess exclusively"
+  "No structured function-calling/tool schema of any kind (Anthropic or OpenAI style) passed to an LLM API; tools are plain executable scripts in the pi subprocess's working directory that pi's own bash tool discovers and invokes itself"
+  "No multi-step tool_call/tool_result loop implemented in Clojure; pi's own internal agent loop handles calling tool scripts as needed within a single subprocess invocation per turn"
+  "No persistent/daemon pi process; every turn is a fresh subprocess, and this latency cost is accepted deliberately in exchange for reusing pi's existing harness"]
+
+ :max-iterations 35
+ :checkpoint-every 7
+ :step-once? false
+ :generate-claude-md? false
+ :judge-mode :code
+ :review-threshold :high
+ :executor-model-config {:agent :pi :provider :zai :model-id "glm-5.3-flash"}
+ :supervisor-model-config {:agent :pi :provider :zai :model-id "glm-5.3"}}

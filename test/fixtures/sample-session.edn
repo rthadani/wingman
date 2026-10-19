@@ -1,0 +1,10 @@
+{:type :session-created, :id "sample-001", :meta {:title "Sample session"}, :created-at "2024-01-01T00:00:00Z"}
+{:type :transcript, :role :user, :text "What is your experience with Clojure?", :ts "2024-01-01T00:00:01Z"}
+{:type :response, :model "mock-llm", :text "I have five years of experience.", :ts "2024-01-01T00:00:02Z"}
+{:type :note, :text "Candidate answered fluently.", :ts "2024-01-01T00:00:03Z"}
+{:type :tool-call, :tool :transcribe-audio, :args {:audio "clip-01.wav"}, :result "ok", :ts "2024-01-01T00:00:04Z"}
+{:type :transcript, :role :interviewer, :text "Describe a tricky bug you fixed.", :ts "2024-01-01T00:00:05Z"}
+{:type :response, :model "mock-llm", :text "A race condition in a queue.", :ts "2024-01-01T00:00:06Z"}
+{:type :tool-call, :tool :web-search, :args {:query "clojure atoms"}, :result "3 results", :ts "2024-01-01T00:00:07Z"}
+{:type :note, :text "Follow up on concurrency.", :ts "2024-01-01T00:00:08Z"}
+{:type :transcript, :role :user, :text "Thanks, that is all.", :ts "2024-01-01T00:00:09Z"}
