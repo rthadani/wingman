@@ -75,6 +75,11 @@ window.renderAssistantMarkdown = function(root){
 </div>
 
 <footer class="h-12 flex-none bg-slate-900 text-slate-100 flex items-center px-4 gap-3 text-sm">
+  <span id="st-session" class="text-xs text-slate-400 flex items-center gap-1"><span class="st-dot w-2 h-2 rounded-full bg-slate-500"></span><span class="st-label">none</span></span>
+  <span id="st-clip" class="text-xs text-slate-400 flex items-center gap-1"><span class="st-dot w-2 h-2 rounded-full bg-slate-500"></span><span class="st-label">clip —</span></span>
+  <span id="st-mic" class="text-xs text-slate-400 flex items-center gap-1"><span class="st-dot w-2 h-2 rounded-full bg-slate-500"></span><span class="st-label">mic —</span></span>
+  <span id="st-call" class="text-xs text-slate-400 flex items-center gap-1"><span class="st-dot w-2 h-2 rounded-full bg-slate-500"></span><span class="st-label">call —</span></span>
+  <span id="st-assistant" class="text-xs text-slate-400 flex items-center gap-1"><span class="st-dot w-2 h-2 rounded-full bg-slate-500"></span><span class="st-label">assistant idle</span></span>
   <span class="flex-1"></span>
   <button id="mute-toggle" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Mute</button>
   <button id="pause-voice-toggle" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Pause voice</button>
@@ -94,6 +99,38 @@ window.renderAssistantMarkdown = function(root){
     }, 50);
   });
   obs.observe(output, { childList: true, subtree: true });
+})();
+</script>
+
+<script>
+(function(){
+  function ageClass(seconds){ return seconds <= 10 ? 'bg-emerald-500' : seconds <= 30 ? 'bg-amber-500' : 'bg-rose-500'; }
+  function ageText(ts, now){ if (!ts) return '—'; var s = Math.round((now - ts) / 1000); return s + 's ago'; }
+  function set(id, text, cls){
+    var el = document.getElementById(id); if (!el) return;
+    var label = el.querySelector('.st-label'); if (label) label.textContent = text;
+    var dot = el.querySelector('.st-dot'); if (dot) dot.className = 'st-dot w-2 h-2 rounded-full ' + cls;
+  }
+  function update(){
+    fetch('/api/status').then(function(r){ return r.json(); }).then(function(d){
+      var now = d.now || Date.now();
+      var session = d.session || 'none';
+      set('st-session', 'session ' + (session.length > 8 ? session.slice(0,8) : session), session !== 'none' ? 'bg-emerald-500' : 'bg-slate-500');
+      var clip = d.last_clipboard ? Math.round((now - d.last_clipboard)/1000) : null;
+      set('st-clip', 'clip ' + (clip !== null ? clip + 's ago' : '—'), clip !== null ? ageClass(clip) : 'bg-slate-500');
+      var micTs = d.last_audio && d.last_audio.candidate;
+      var mic = micTs ? Math.round((now - micTs)/1000) : null;
+      set('st-mic', 'mic ' + (mic !== null ? mic + 's ago' : '—'), mic !== null ? ageClass(mic) : 'bg-slate-500');
+      var callTs = d.last_audio && d.last_audio.interviewer;
+      var call = callTs ? Math.round((now - callTs)/1000) : null;
+      set('st-call', 'call ' + (call !== null ? call + 's ago' : '—'), call !== null ? ageClass(call) : 'bg-slate-500');
+      var turnAge = d.last_turn ? Math.round((now - d.last_turn)/1000) : null;
+      var assistantText = 'assistant ' + (d.turn_state || 'idle') + (turnAge !== null ? ' ' + turnAge + 's ago' : '');
+      set('st-assistant', assistantText, d.turn_state === 'thinking' ? 'bg-amber-500' : (turnAge !== null ? ageClass(turnAge) : 'bg-slate-500'));
+    }).catch(function(){});
+  }
+  update();
+  setInterval(update, 1500);
 })();
 </script>
 

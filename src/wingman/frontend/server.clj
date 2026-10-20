@@ -15,6 +15,7 @@
    ["/api/capture/mute" {:post {:handler handlers/capture-mute-handler}}]
    ["/api/capture/unmute" {:post {:handler handlers/capture-unmute-handler}}]
    ["/api/pause/status" {:conflicting true :get {:handler handlers/pause-status-handler}}]
+   ["/api/status" {:get {:handler handlers/status-handler}}]
    ["/api/pause/:kind" {:conflicting true :post {:handler handlers/pause-handler}}]
    ["/api/resume/:kind" {:post {:handler handlers/resume-handler}}]
    ["/api/session/:id" {:delete {:handler handlers/session-delete-handler}}]

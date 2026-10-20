@@ -14,7 +14,7 @@
           :pi-bin (or (env "PI_BIN") "pi")
           :provider (env "PI_PROVIDER")
           :model (env "PI_MODEL")
-          :whisper-model (env "WHISPER_MODEL")
+          :whisper-model (or (env "WHISPER_MODEL") "models/ggml-base.en.bin")
           :sessions-dir "data/sessions"
           :tools-dir "tools"
           :archive-dir "data/archive"

@@ -64,6 +64,7 @@
   (async/thread
     (loop []
       (when-let [{:keys [speaker bytes]} (async/<!! ch)]
+        (swap! (:stats sys) assoc-in [:last-audio speaker] (System/currentTimeMillis))
         (binding [*out* *err*]
           (println "audio-chunk rx" speaker (count bytes)))
         (when-not (paused? sys :voice)
@@ -119,29 +120,33 @@
 
 (defn- run-chat-turn
   [sys session session-id msg]
-  (let [{:keys [text source speaker pre-appended?]} (if (map? msg) msg {:text msg :source :chat})
-        speaker (or speaker (if (= :clipboard source) :interviewer :candidate))
-        ev (when-not pre-appended? (append-transcript! sys session-id text speaker))
-        line-ch (async/chan (async/dropping-buffer 256))
-        watcher (async/go-loop []
-                  (when-let [line (async/<! line-ch)]
-                    (sse/broadcast (:sse-registry sys) session-id "assistant"
-                                   (str (h/html [:span {:class "block text-sm text-slate-700 assistant-stream"} line])))
-                    (recur)))
-        result (try
-                (when-not pre-appended?
-                  (sse/broadcast (:sse-registry sys) session-id "transcript"
-                                 (str (renderer/transcript-fragment
-                                       {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)}))))
-                (agent-loop/run-turn! session (chat-prompt sys session-id) line-ch)
-                (finally
-                  (async/close! line-ch)
-                  (async/<!! watcher)))]
-    (when-not (:skip? result)
-      (let [response-text (str (:text result))]
-        (append-response! sys session-id response-text)
-        (sse/broadcast (:sse-registry sys) session-id "assistant"
-                       (str (renderer/response-fragment response-text true)))))))
+  (swap! (:stats sys) assoc :turn-state :thinking)
+  (try
+    (let [{:keys [text source speaker pre-appended?]} (if (map? msg) msg {:text msg :source :chat})
+          speaker (or speaker (if (= :clipboard source) :interviewer :candidate))
+          ev (when-not pre-appended? (append-transcript! sys session-id text speaker))
+          line-ch (async/chan (async/dropping-buffer 256))
+          watcher (async/go-loop []
+                    (when-let [line (async/<! line-ch)]
+                      (sse/broadcast (:sse-registry sys) session-id "assistant"
+                                     (str (h/html [:span {:class "block text-sm text-slate-700 assistant-stream"} line])))
+                      (recur)))
+          result (try
+                  (when-not pre-appended?
+                    (sse/broadcast (:sse-registry sys) session-id "transcript"
+                                   (str (renderer/transcript-fragment
+                                         {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)}))))
+                  (agent-loop/run-turn! session (chat-prompt sys session-id) line-ch)
+                  (finally
+                    (async/close! line-ch)
+                    (async/<!! watcher)))]
+      (when-not (:skip? result)
+        (let [response-text (str (:text result))]
+          (append-response! sys session-id response-text)
+          (sse/broadcast (:sse-registry sys) session-id "assistant"
+                         (str (renderer/response-fragment response-text true))))))
+    (finally
+      (swap! (:stats sys) assoc :turn-state :idle :last-turn (System/currentTimeMillis)))))
 
 (defn- start-chat-consumer!
   [sys session-id ch]

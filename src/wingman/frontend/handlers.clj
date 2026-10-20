@@ -8,6 +8,7 @@
             [wingman.frontend.renderer :as renderer]
             [wingman.frontend.session :as session]
             [wingman.frontend.sse :as sse]
+            [wingman.frontend.whisper :as whisper]
             [org.httpkit.server :as http-kit]))
 
 (def ^:private new-session-js
@@ -185,8 +186,23 @@
       (when (and (map? m)
                  (= "clipboard.update" (:type m))
                  (string? (:payload m)))
+        (swap! (:stats sys) assoc :last-clipboard (System/currentTimeMillis))
         (async/offer! (pipelines/ensure-chat-pipeline! sys session-id)
                       {:source :clipboard :text (:payload m)})))))
+
+(defn status-handler [{:keys [wingman.frontend/sys]}]
+  (let [stats @(:stats sys)]
+    {:status 200
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string
+            {:session @(:active-session sys)
+             :capture (dissoc (:capture stats) :muted?)
+             :whisper (whisper/whisper-available? (get-in sys [:config :whisper-model]))
+             :last_clipboard (:last-clipboard stats)
+             :last_audio (:last-audio stats)
+             :last_turn (:last-turn stats)
+             :turn_state (:turn-state stats)
+             :now (System/currentTimeMillis)})}))
 
 (defn ws-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
