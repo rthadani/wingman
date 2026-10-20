@@ -185,8 +185,7 @@
                                d)
                              nil])]
     (doto (Thread. ^Runnable dispatcher) (.start))
-    (binding [*out* *err*]
-      (println "dispatcher started" speaker (or (when mixer (.getName ^Mixer mixer)) "default-microphone")))
+    (binding [*out* *err*])
     (cond-> {:dispatcher dispatcher}
       line (assoc :line line))))
 
