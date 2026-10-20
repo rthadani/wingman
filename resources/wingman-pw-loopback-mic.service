@@ -1,0 +1,13 @@
+[Unit]
+Description=Wingman candidate mic (microphone to snd-aloop card B)
+After=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+Environment=SOURCE=alsa_input.usb-046d_0825_91EA6820-02.mono-fallback
+ExecStart=/bin/sh -c "/usr/bin/pw-record --target=${SOURCE} --rate 48000 --channels 2 --format s16 - 2>/dev/null | /usr/bin/aplay -D plughw:4,1 -f S16_LE -r 48000 -c 2"
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

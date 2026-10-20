@@ -35,7 +35,7 @@
                                               (swap! ws-urls conj ws-url)
                                               (reset! ws-atom {:ws :fake :closed (async/chan)}))
                   transport/start-sender! (fn [_ws-atom] sender-ch)
-                  audio/start-audio-capture! (fn [f _mixers] (reset! audio-fn f) (Object.))
+                  audio/start-audio-capture! (fn [f _mixers] (reset! audio-fn f) [{:dispatcher (Object.)}])
                   clipboard/start-clipboard-watch! (fn [f] (reset! clip-fn f))]
       (srv/start-capture! state "http://localhost:7777" "sess-1")
       (is (= :capturing (:status @state)))
@@ -55,7 +55,7 @@
                      :ws-atom (atom {:ws :fake :closed (async/chan)})
                      :stop-ch (async/chan)
                      :sender (async/chan 8)
-                     :dispatchers [(Object.)]})
+                     :dispatchers [{:dispatcher (Object.)}]})
         stopped (atom {:audio false :clipboard false})]
     (with-redefs [audio/stop-audio-capture! (fn [_] (swap! stopped assoc :audio true))
                   clipboard/stop-clipboard-watch! (fn [] (swap! stopped assoc :clipboard true))]
@@ -71,7 +71,7 @@
         audio-fn (atom nil)]
     (with-redefs [transport/keep-connected! (fn [_a _b _c _d] nil)
                   transport/start-sender! (fn [_] sender-ch)
-                  audio/start-audio-capture! (fn [f _mixers] (reset! audio-fn f) (Object.))
+                  audio/start-audio-capture! (fn [f _mixers] (reset! audio-fn f) [{:dispatcher (Object.)}])
                   clipboard/start-clipboard-watch! (fn [_] nil)]
       (srv/start-capture! state "http://localhost:7777" "sess-1")
       (srv/mute state {})
@@ -87,17 +87,31 @@
         (is (= [4 5 6] (vec (second msg))))))))
 
 (deftest start-capture-assigns-speakers-test
-  (let [state (atom {:status :idle :devices ["Mic" "BlackHole"]})
+  (let [state (atom {:status :idle :devices [{:name "Mic"} {:name "BlackHole"}]})
         captured (atom nil)]
     (with-redefs [audio/find-mixer (fn [n] (when (#{"Mic" "BlackHole"} n) (str "mixer-" n)))
                   transport/keep-connected! (fn [_a _b _c _d] nil)
                   transport/start-sender! (fn [_] (async/chan 16))
-                  audio/start-audio-capture! (fn [_send-fn devices] (reset! captured devices) [])
+                  audio/start-audio-capture! (fn [_send-fn devices] (reset! captured devices) [{:dispatcher (Object.)}])
                   clipboard/start-clipboard-watch! (fn [_] nil)]
       (srv/start-capture! state "http://localhost:7777" "sess-1")
       (is (= [{:mixer "mixer-Mic" :speaker :candidate}
               {:mixer "mixer-BlackHole" :speaker :interviewer}]
              @captured)))))
+
+(deftest resolve-devices-explicit-speaker-test
+  (with-redefs [audio/find-mixer (fn [n] (when (#{"plughw:3" "mic"} n) (str "mixer-" n)))]
+    (is (= [{:mixer "mixer-plughw:3" :speaker :interviewer}]
+           (#'srv/resolve-devices [{:name "plughw:3" :speaker :interviewer}])))
+    (is (= [{:mixer "mixer-mic" :speaker :candidate}
+            {:mixer "mixer-plughw:3" :speaker :interviewer}]
+           (#'srv/resolve-devices [{:name "mic"} {:name "plughw:3" :speaker :interviewer}])))
+    (is (= [{:mixer "mixer-mic" :speaker :interviewer}
+            {:mixer "mixer-plughw:3" :speaker :candidate}]
+           (#'srv/resolve-devices [{:name "mic" :speaker :interviewer} {:name "plughw:3"}])))
+    (is (= [{:mixer "mixer-mic" :speaker :candidate}
+            {:mixer "mixer-plughw:3" :speaker :interviewer}]
+           (#'srv/resolve-devices ["mic" "plughw:3"])))))
 
 (deftest control-server-roundtrip-test
   (let [port (free-port)
@@ -110,7 +124,7 @@
       (with-redefs [srv/create-session! (constantly "sess-7")
                     transport/keep-connected! (fn [_a _b _c _d] nil)
                     transport/start-sender! (fn [_] (async/chan 16))
-                    audio/start-audio-capture! (fn [_ _] (Object.))
+                    audio/start-audio-capture! (fn [_ _] [{:dispatcher (Object.)}])
                     audio/stop-audio-capture! (fn [_] nil)
                     clipboard/start-clipboard-watch! (fn [_] nil)
                     clipboard/stop-clipboard-watch! (fn [] nil)]
@@ -143,7 +157,7 @@
       (is (= 1 @stop-calls)))
     (with-redefs [transport/keep-connected! (fn [_a _b _c _d] nil)
                   transport/start-sender! (fn [_] (async/chan 16))
-                  audio/start-audio-capture! (fn [_ _] (Object.))
+                  audio/start-audio-capture! (fn [_ _] [{:dispatcher (Object.)}])
                   audio/stop-audio-capture! (fn [_] (swap! stop-calls inc))
                   clipboard/start-clipboard-watch! (fn [_] nil)
                   clipboard/stop-clipboard-watch! (fn [] nil)]

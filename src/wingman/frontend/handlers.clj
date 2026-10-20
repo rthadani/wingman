@@ -44,6 +44,7 @@
   (let [ev (session/create-session (get-in sys [:config :sessions-dir]))
         id (:id ev)]
     (capture-control/start! (get-in sys [:config :capture-url]) id)
+    (reset! (:active-session sys) id)
     {:status 200
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:id id})}))
@@ -53,12 +54,17 @@
     (if-not (known-session? sys id)
       {:status 404 :body "unknown session"}
       (do
-        (capture-control/status!
-         (get-in sys [:config :capture-url])
-         (fn [st] (when (= id (:session-id st)) (capture-control/stop! (get-in sys [:config :capture-url]))))
-         (fn [_] nil))
         (io/delete-file (io/file (get-in sys [:config :sessions-dir]) (str id ".edn")) true)
-        {:status 204}))))
+        (capture-control/stop! (get-in sys [:config :capture-url]))
+        (reset! (:active-session sys) nil)
+        (when-let [entry (get @(:chat-pipelines sys) id)]
+          (async/close! (:ch entry))
+          (swap! (:chat-pipelines sys) dissoc id))
+        (when-let [entry (get @(:audio-pipelines sys) id)]
+          (async/close! (:ch entry))
+          (swap! (:audio-pipelines sys) dissoc id))
+        {:status 200
+         :body ""}))))
 
 (defn capture-stop-handler [{:keys [wingman.frontend/sys]}]
   (capture-control/stop! (get-in sys [:config :capture-url]))
@@ -96,7 +102,7 @@
         sessions (mapv (fn [id] {:id id :title id}) ids)]
     {:status 200
      :headers {"Content-Type" "text/html"}
-     :body (str (renderer/session-list-fragment sessions))}))
+     :body (str (renderer/session-list-fragment sessions @(:active-session sys)))}))
 
 (defn session-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
@@ -104,6 +110,7 @@
       {:status 404 :body "unknown session"}
       (let [events (session/load-session (get-in sys [:config :sessions-dir]) id)
             history (apply str (keep renderer/history-fragment events))]
+        (reset! (:active-session sys) id)
         (capture-control/start! (get-in sys [:config :capture-url]) id)
         {:status 200
          :headers {"Content-Type" "text/html"

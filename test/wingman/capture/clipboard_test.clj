@@ -1,13 +1,15 @@
 (ns wingman.capture.clipboard-test
-  (:require [clojure.test :refer [deftest is use-fixtures]]
+  (:require [clojure.core.async :as async]
+            [clojure.test :refer [deftest is use-fixtures]]
             [wingman.capture.clipboard :as clipboard])
   (:import (java.awt Toolkit)
            (java.awt.datatransfer StringSelection)))
 
 (def ^:private delivered #'clipboard/delivered)
+(def ^:private watch @#'clipboard/watch)
 
 (defn- reset-state [f]
-  (reset! @delivered #{})
+  (reset! @delivered {})
   (try (f) (finally (clipboard/stop-clipboard-watch!))))
 
 (use-fixtures :each reset-state)
@@ -50,6 +52,33 @@
     ;; new text still flows
     (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "new-text")
     (is (= ["shared-text" "new-text"] @sent))))
+
+(deftest send-if-new-resends-after-window-test
+  (let [sent (atom [])
+        clock (atom 0)]
+    (with-redefs [clipboard/now-ms (fn [] @clock)]
+      (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "same")
+      (is (= ["same"] @sent))
+      ;; same instant is inside the 60s window
+      (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "same")
+      (is (= ["same"] @sent))
+      ;; jump 61s forward
+      (swap! clock + 61000)
+      (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "same")
+      (is (= ["same" "same"] @sent)))))
+
+(deftest start-clipboard-watch-replaces-prior-watcher-test
+  (with-redefs [clipboard/read-clipboard (constantly nil)]
+    (clipboard/start-clipboard-watch! (fn [_]))
+    (let [first-watcher @watch
+          first-stop-ch (:stop-ch first-watcher)]
+      (is (some? first-watcher))
+      (clipboard/start-clipboard-watch! (fn [_]))
+      (is (some? @watch))
+      (is (not= first-watcher @watch) "new watcher replaced the old one")
+      (let [closed? (async/alt!! first-stop-ch ([_] true)
+                                 (async/timeout 100) ([_] false))]
+        (is closed? "prior watcher stop-ch was closed")))))
 
 (deftest pre-arm-clipboard-is-sent-on-first-poll-test
   (let [clipboard (-> (Toolkit/getDefaultToolkit) (.getSystemClipboard))

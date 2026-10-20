@@ -12,6 +12,21 @@
 
 (def ^:private history-window 20)
 
+(def ^:private last-audio-turn (atom {}))
+
+(declare ensure-chat-pipeline!)
+
+(defn- meaningful-speech?
+  "Returns true when the transcription contains enough real speech to keep.
+   Strips non-speech markers such as [BLANK_AUDIO] or (wind blowing)."
+  [text]
+  (let [clean (-> text
+                  (str/replace #"\[[^\]]*\]" "")
+                  (str/replace #"\([^)]*\)" "")
+                  str/trim)]
+    (and (>= (count (str/split clean #"\s+")) 3)
+         (>= (count clean) 12))))
+
 (defn- paused? [sys kind] (get @(:paused sys) kind false))
 
 (defn- session-lock
@@ -49,16 +64,27 @@
   (async/thread
     (loop []
       (when-let [{:keys [speaker bytes]} (async/<!! ch)]
+        (binding [*out* *err*]
+          (println "audio-chunk rx" speaker (count bytes)))
         (when-not (paused? sys :voice)
           (try
             (let [cfg (:config sys)]
               (when (whisper/whisper-available? (:whisper-model cfg))
-                (let [text (str/replace (:text (whisper/transcribe-pcm bytes)) "\n" " ")]
-                  (when-not (= "" text)
+                (let [text (str/replace (:text (whisper/transcribe-pcm bytes)) "\n" " ")
+                      t (str/trim text)]
+                  (binding [*out* *err*]
+                    (println "transcribed" speaker (count t) "chars"))
+                  (when (meaningful-speech? t)
                     (let [ev (append-transcript! sys session-id text speaker)]
                       (sse/broadcast (:sse-registry sys) session-id "transcript"
                                      (str (renderer/transcript-fragment
-                                           {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)}))))))))
+                                           {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)})))
+                      (let [now (System/currentTimeMillis)
+                            last (get @last-audio-turn session-id 0)]
+                        (when (>= (- now last) 6000)
+                          (swap! last-audio-turn assoc session-id now)
+                          (async/offer! (ensure-chat-pipeline! sys session-id)
+                                        {:source :audio :speaker speaker :text text :pre-appended? true}))))))))
             (catch Exception e
               (binding [*out* *err*]
                 (println "audio chunk failed:" (.getMessage e))))))
@@ -93,9 +119,9 @@
 
 (defn- run-chat-turn
   [sys session session-id msg]
-  (let [{:keys [text source]} (if (map? msg) msg {:text msg :source :chat})
-        speaker (if (= :clipboard source) :interviewer :candidate)
-        ev (append-transcript! sys session-id text speaker)
+  (let [{:keys [text source speaker pre-appended?]} (if (map? msg) msg {:text msg :source :chat})
+        speaker (or speaker (if (= :clipboard source) :interviewer :candidate))
+        ev (when-not pre-appended? (append-transcript! sys session-id text speaker))
         line-ch (async/chan (async/dropping-buffer 256))
         watcher (async/go-loop []
                   (when-let [line (async/<! line-ch)]
@@ -103,9 +129,10 @@
                                    (str (h/html [:span {:class "block text-sm text-slate-700 assistant-stream"} line])))
                     (recur)))
         result (try
-                (sse/broadcast (:sse-registry sys) session-id "transcript"
-                               (str (renderer/transcript-fragment
-                                     {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)})))
+                (when-not pre-appended?
+                  (sse/broadcast (:sse-registry sys) session-id "transcript"
+                                 (str (renderer/transcript-fragment
+                                       {:id (:id ev) :speaker speaker :text text :timestamp (:ts ev)}))))
                 (agent-loop/run-turn! session (chat-prompt sys session-id) line-ch)
                 (finally
                   (async/close! line-ch)

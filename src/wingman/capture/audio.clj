@@ -68,19 +68,30 @@
                      :description (.getDescription mi)}))))
         (AudioSystem/getMixerInfo)))
 
+(defn- mixer-infos []
+  (AudioSystem/getMixerInfo))
+
+(defn- mixer-for [mi]
+  (AudioSystem/getMixer mi))
+
+(defn- supports-target-line? [mi]
+  (.isLineSupported (mixer-for mi) (DataLine$Info. TargetDataLine target-format)))
+
 (defn find-mixer [name-or-desc]
   (let [t (str/lower-case (str/trim (or name-or-desc "")))]
     (when-not (str/blank? t)
       (or (some (fn [mi]
-                  (when (or (= t (str/lower-case (.getName mi)))
-                            (= t (str/lower-case (.getDescription mi))))
-                    (AudioSystem/getMixer mi)))
-                (AudioSystem/getMixerInfo))
+                  (when (and (supports-target-line? mi)
+                             (or (= t (str/lower-case (.getName mi)))
+                                 (= t (str/lower-case (.getDescription mi)))))
+                    (mixer-for mi)))
+                (mixer-infos))
           (some (fn [mi]
-                  (when (or (str/includes? (str/lower-case (.getName mi)) t)
-                            (str/includes? (str/lower-case (.getDescription mi)) t))
-                    (AudioSystem/getMixer mi)))
-                (AudioSystem/getMixerInfo))))))
+                  (when (and (supports-target-line? mi)
+                             (or (str/includes? (str/lower-case (.getName mi)) t)
+                                 (str/includes? (str/lower-case (.getDescription mi)) t)))
+                    (mixer-for mi)))
+                (mixer-infos))))))
 
 (defn- downmix [^floats buf ^long channels]
   (let [frames (/ (alength buf) channels)
@@ -131,31 +142,64 @@
               (let [^TargetDataLine line (.getLine mixer (DataLine$Info. TargetDataLine fmt))]
                 (.open line fmt)
                 (.start line)
-                (println "capture format:" (.getSampleRate fmt) "Hz" (.getChannels fmt) "ch")
+                (binding [*out* *err*]
+                  (println "capture format:" (.getSampleRate fmt) "Hz" (.getChannels fmt) "ch"))
                 [line fmt])
               (catch LineUnavailableException _
                 nil))))
         capture-formats))
 
+(defn- pcm-rms [^bytes pcm]
+  (let [n (alength pcm)
+        samples (quot n 2)]
+    (if (zero? samples)
+      0
+      (let [bb (doto (ByteBuffer/wrap pcm)
+                 (.order ByteOrder/LITTLE_ENDIAN))
+            sum (loop [i 0 s 0.0]
+                  (if (< i samples)
+                    (let [v (double (.getShort bb))]
+                      (recur (inc i) (+ s (* v v))))
+                    s))]
+        (int (Math/sqrt (/ (double sum) (max 1 samples))))))))
+
+(defn- logged-send-fn [speaker send-fn]
+  (fn [pcm]
+    (try
+      (binding [*out* *err*]
+        (println "audio-flush" speaker (quot (count pcm) 2) "samples rms" (pcm-rms pcm)))
+      (catch Exception _))
+    (send-fn speaker pcm)))
+
 (defn dispatcher-for [send-fn {:keys [mixer speaker]}]
   (let [detector (SilenceDetector. (silence-threshold-db) true)
-        utterance (utterance-processor detector (fn [pcm] (send-fn speaker pcm)))
-        dispatcher (if-let [[^TargetDataLine line ^AudioFormat fmt] (when mixer (open-mixer-line mixer))]
-                     (let [d (AudioDispatcher. (JVMAudioInputStream. (AudioInputStream. line)) 1024 0)]
-                       (.addAudioProcessor d (source-converter fmt [detector utterance]))
-                       d)
-                     (let [d (AudioDispatcherFactory/fromDefaultMicrophone 16000 1024 0)]
-                       (.addAudioProcessor d detector)
-                       (.addAudioProcessor d utterance)
-                       d))]
+        utterance (utterance-processor detector (logged-send-fn speaker send-fn))
+        [dispatcher line] (if-let [[^TargetDataLine line ^AudioFormat fmt] (when mixer (open-mixer-line mixer))]
+                            [(let [d (AudioDispatcher. (JVMAudioInputStream. (AudioInputStream. line)) 1024 0)]
+                               (.addAudioProcessor d (source-converter fmt [detector utterance]))
+                               d)
+                             line]
+                            [(let [d (AudioDispatcherFactory/fromDefaultMicrophone 16000 1024 0)]
+                               (.addAudioProcessor d detector)
+                               (.addAudioProcessor d utterance)
+                               d)
+                             nil])]
     (doto (Thread. ^Runnable dispatcher) (.start))
-    dispatcher))
+    (binding [*out* *err*]
+      (println "dispatcher started" speaker (or (when mixer (.getName ^Mixer mixer)) "default-microphone")))
+    (cond-> {:dispatcher dispatcher}
+      line (assoc :line line))))
 
 (defn start-audio-capture!
   ([send-fn] (start-audio-capture! send-fn [{:mixer nil :speaker :candidate}]))
   ([send-fn devices]
    (mapv #(dispatcher-for send-fn %) devices)))
 
-(defn stop-audio-capture! [dispatchers]
-  (doseq [d dispatchers]
-    (.stop ^AudioDispatcher d)))
+(defn stop-audio-capture! [entries]
+  (doseq [e entries]
+    (.stop ^AudioDispatcher (:dispatcher e))
+    (when-let [^TargetDataLine line (:line e)]
+      (try
+        (.stop line)
+        (.close line)
+        (catch Exception _)))))

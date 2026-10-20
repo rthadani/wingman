@@ -1,0 +1,13 @@
+[Unit]
+Description=Wingman interviewer audio (call output to snd-aloop card A)
+After=pipewire.service wireplumber.service
+
+[Service]
+Type=simple
+Environment=SOURCE=alsa_output.pci-0000_01_00.1.hdmi-stereo.monitor
+ExecStart=/bin/sh -c "/usr/bin/pw-record --target=${SOURCE} --rate 48000 --channels 2 --format s16 - 2>/dev/null | /usr/bin/aplay -D plughw:3,1 -f S16_LE -r 48000 -c 2"
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

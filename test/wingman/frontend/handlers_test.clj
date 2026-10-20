@@ -1,5 +1,6 @@
 (ns wingman.frontend.handlers-test
   (:require [cheshire.core :as json]
+            [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -32,31 +33,74 @@
   (let [calls (atom [])]
     (with-redefs [session/create-session (fn [_] {:id "sess-123"})
                   capture-control/start! (fn [url id] (swap! calls conj [url id]))]
-      (let [res (handlers/session-create-handler
-                 {:wingman.frontend/sys {:config {:sessions-dir "x" :capture-url "http://c:7778"}}})]
+      (let [active (atom nil)
+            res (handlers/session-create-handler
+                 {:wingman.frontend/sys {:config {:sessions-dir "x" :capture-url "http://c:7778"}
+                                         :active-session active}})]
         (is (= 200 (:status res)))
         (is (= {:id "sess-123"} (json/parse-string (:body res) true)))
-        (is (= [["http://c:7778" "sess-123"]] @calls))))))
+        (is (= [["http://c:7778" "sess-123"]] @calls))
+        (is (= "sess-123" @active))))))
 
 (deftest session-delete-handler-test
   (let [dir (temp-dir)]
     (try
       (let [id (:id (session/create-session dir))
-            status-calls (atom [])
+            active (atom id)
             stop-calls (atom [])]
-        (with-redefs [capture-control/status! (fn [url on-ok _]
-                                                (swap! status-calls conj url)
-                                                (on-ok {:session-id id}))
-                      capture-control/stop! (fn [url] (swap! stop-calls conj url))]
-          (let [sys {:wingman.frontend/sys {:config {:sessions-dir dir :capture-url "http://c:7778"}}}
+        (with-redefs [capture-control/stop! (fn [url] (swap! stop-calls conj url))]
+          (let [sys {:wingman.frontend/sys {:config {:sessions-dir dir :capture-url "http://c:7778"}
+                                            :active-session active
+                                            :chat-pipelines (atom {})
+                                            :audio-pipelines (atom {})}}
                 unknown (handlers/session-delete-handler (assoc sys :path-params {:id "no-such"}))
                 ok (handlers/session-delete-handler (assoc sys :path-params {:id id}))]
             (is (= 404 (:status unknown)))
             (is (= "unknown session" (:body unknown)))
-            (is (= 204 (:status ok)))
+            (is (= 200 (:status ok)))
             (is (not (.exists (io/file dir (str id ".edn")))))
-            (is (= ["http://c:7778"] @status-calls))
-            (is (= ["http://c:7778"] @stop-calls)))))
+            (is (= ["http://c:7778"] @stop-calls))
+            (is (nil? @active)))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest session-delete-handler-tears-down-pipelines-test
+  (let [dir (temp-dir)]
+    (try
+      (let [id (:id (session/create-session dir))
+            chat-ch (async/chan)
+            audio-ch (async/chan)
+            chat-pipelines (atom {id {:ch chat-ch}})
+            audio-pipelines (atom {id {:ch audio-ch}})
+            stop-calls (atom [])
+            sys {:wingman.frontend/sys {:config {:sessions-dir dir :capture-url "http://c:7778"}
+                                        :active-session (atom nil)
+                                        :chat-pipelines chat-pipelines
+                                        :audio-pipelines audio-pipelines}}]
+        (with-redefs [capture-control/stop! (fn [url] (swap! stop-calls conj url))]
+          (let [res (handlers/session-delete-handler (assoc sys :path-params {:id id}))]
+            (is (= 200 (:status res)))
+            (is (= ["http://c:7778"] @stop-calls))
+            (is (not (contains? @chat-pipelines id)))
+            (is (not (contains? @audio-pipelines id))))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest sessions-handler-highlights-active-test
+  (let [dir (temp-dir)]
+    (try
+      (let [a (:id (session/create-session dir))
+            b (:id (session/create-session dir))
+            active (atom a)
+            res (handlers/sessions-handler
+                 {:wingman.frontend/sys {:config {:sessions-dir dir}
+                                         :active-session active}})
+            body (body-str res)]
+        (is (= 200 (:status res)))
+        (is (str/includes? body "bg-slate-700"))
+        (is (str/includes? body "text-white"))
+        (is (str/includes? body (str "hx-delete=\"/api/session/" a "\"")))
+        (is (str/includes? body (str "hx-delete=\"/api/session/" b "\""))))
       (finally
         (delete-recursively! dir)))))
 

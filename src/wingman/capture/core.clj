@@ -9,7 +9,10 @@
   (->> (str/split (or env-val "") #",")
        (map str/trim)
        (remove str/blank?)
-       vec))
+       (mapv (fn [entry]
+               (if-let [[_ name speaker] (re-matches #"(?i)^(.+?)=(candidate|interviewer)$" entry)]
+                 {:name name :speaker (keyword (str/lower-case speaker))}
+                 {:name entry :speaker nil})))))
 
 (defn parse-selection-line [devices line]
   (if (str/blank? line)
@@ -18,8 +21,7 @@
          (map str/trim)
          (keep #(when (re-matches #"\d+" %) (parse-long %)))
          (keep #(nth devices (dec %) nil))
-         (map :name)
-         vec)))
+         (mapv #(hash-map :name (:name %) :speaker nil)))))
 
 (defn select-devices
   ([] (select-devices (audio/list-devices) (System/console) (audio/env "CAPTURE_DEVICES")))
@@ -42,7 +44,7 @@
         devices (select-devices)
         state (atom {:status :idle :session-id nil :muted? false :server nil :devices devices})]
     (when (seq devices)
-      (println "capturing devices:" (str/join ", " devices)))
+      (println "capturing devices:" (str/join ", " (map :name devices))))
     (swap! state assoc :server (server/start-server! state port))
     (.addShutdownHook (Runtime/getRuntime)
                       (Thread. (fn []

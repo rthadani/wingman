@@ -32,13 +32,25 @@
 (defn current-status [state]
   (select-keys @state [:status :session-id]))
 
-(defn- resolve-devices [names]
-  (if (seq names)
-    (let [labeled (map-indexed (fn [i n] {:name n :speaker (if (zero? i) :candidate :interviewer)}) names)
+(defn- resolve-devices [entries]
+  (if (seq entries)
+    (let [normalized (mapv #(if (string? %) {:name % :speaker nil} %) entries)
+          assigned (loop [remaining normalized
+                          assigned-candidate? false
+                          acc []]
+                     (if (empty? remaining)
+                       acc
+                       (let [{:keys [name speaker]} (first remaining)
+                             [speaker assigned-candidate?'] (if (some? speaker)
+                                                              [speaker assigned-candidate?]
+                                                              (if assigned-candidate?
+                                                                [:interviewer true]
+                                                                [:candidate true]))]
+                         (recur (rest remaining) assigned-candidate?' (conj acc {:name name :speaker speaker})))))
           resolved (keep (fn [{:keys [name speaker]}]
                            (when-let [m (audio/find-mixer name)]
                              {:mixer m :speaker speaker}))
-                         labeled)]
+                         assigned)]
       (if (seq resolved) resolved [{:mixer nil :speaker :candidate}]))
     [{:mixer nil :speaker :candidate}]))
 
@@ -54,9 +66,9 @@
                               .build)
                    ws-url (derive-ws-url agent-url session-id)
                    names (or (:devices s) [])
-                   _ (doseq [n names :when (nil? (audio/find-mixer n))]
+                   _ (doseq [n names :when (nil? (audio/find-mixer (:name n)))]
                        (binding [*out* *err*]
-                         (println "audio device not found:" n)))
+                         (println "audio device not found:" (:name n))))
                    devices (resolve-devices names)
                    _ (transport/keep-connected! ws-atom ws-url client stop-ch)
                    sender (transport/start-sender! ws-atom)

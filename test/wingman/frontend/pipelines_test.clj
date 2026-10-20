@@ -53,17 +53,17 @@
                           http-kit/close (fn [_ch] nil)]
               (sse/register-client (:sse-registry sys) "sess-a" client)
               (with-redefs [whisper/whisper-available? (fn [& _] true)
-                            whisper/transcribe-pcm (fn [_] {:text "hello world" :segments []})]
+                            whisper/transcribe-pcm (fn [_] {:text "hello world today" :segments []})]
                 (let [ch (pipelines/ensure-audio-pipeline! sys "sess-a")]
                   (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "audio-bytes")})))
                 (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-a"))))))
                 (let [ev (first (transcript-events dir "sess-a"))]
-                  (is (= "hello world" (:text ev)))
+                  (is (= "hello world today" (:text ev)))
                   (is (= :candidate (:speaker ev)))
                   (is (= 1 (:id ev))))
                 (let [frame (first (poll-for 2000 #(seq @frames)))]
                   (is (str/includes? (str frame) "event: transcript"))
-                  (is (str/includes? (str frame) "hello world"))))))
+                  (is (str/includes? (str frame) "hello world today"))))))
           (finally
             (system/stop-system sys))))
       (finally
@@ -76,7 +76,7 @@
       (let [sys (system/build-system {:sessions-dir dir})]
         (try
           (with-redefs [whisper/whisper-available? (fn [& _] true)
-                        whisper/transcribe-pcm (fn [_] {:text "interviewer says" :segments []})]
+                        whisper/transcribe-pcm (fn [_] {:text "interviewer says hello" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-i")]
               (is (async/offer! ch {:speaker :interviewer :bytes (.getBytes "x")})))
             (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-i"))))))
@@ -183,6 +183,89 @@
       (finally
         (delete-recursively! dir)))))
 
+(deftest chat-pipeline-audio-pre-appended-runs-turn-without-duplicating-transcript-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-audio-pre")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (with-redefs [agent-loop/start-session! (fn [_opts] {:context-dir "x" :conn {}})
+                        agent-loop/close-session! (fn [_] nil)
+                        agent-loop/run-turn! (fn [_session _prompt _line-ch] {:text "agent reply" :skip? false})]
+            (let [ch (pipelines/ensure-chat-pipeline! sys "sess-audio-pre")]
+              (is (async/offer! ch {:source :audio :speaker :candidate :text "hello there" :pre-appended? true})))
+            (is (pos? (count (poll-for 3000 #(seq (response-events dir "sess-audio-pre"))))))
+            (is (= "agent reply" (:text (first (response-events dir "sess-audio-pre")))))
+            (is (empty? (transcript-events dir "sess-audio-pre"))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest meaningful-speech-detects-noise-test
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "[BLANK_AUDIO]")))
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "[silence]")))
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "(wind blowing) (wind blowing) [BLANK_AUDIO]")))
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "...")))
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "  ")))
+  (is (false? ((var-get #'pipelines/meaningful-speech?) "hi")))
+  (is (true? ((var-get #'pipelines/meaningful-speech?) "hi [silence] hello world")))
+  (is (true? ((var-get #'pipelines/meaningful-speech?) "This is a real sentence."))))
+
+(deftest audio-pipeline-filters-noise-markers-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-noise")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (with-redefs [whisper/whisper-available? (fn [& _] true)
+                        whisper/transcribe-pcm (fn [_] {:text "[BLANK_AUDIO]" :segments []})]
+            (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
+              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise1")}))
+              (async/<!! (async/timeout 300))
+              (is (empty? (transcript-events dir "sess-noise")))))
+          (with-redefs [whisper/whisper-available? (fn [& _] true)
+                        whisper/transcribe-pcm (fn [_] {:text "(wind blowing) (wind blowing) [BLANK_AUDIO]" :segments []})]
+            (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
+              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise2")}))
+              (async/<!! (async/timeout 300))
+              (is (empty? (transcript-events dir "sess-noise")))))
+          (with-redefs [whisper/whisper-available? (fn [& _] true)
+                        whisper/transcribe-pcm (fn [_] {:text "..." :segments []})]
+            (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
+              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise3")}))
+              (async/<!! (async/timeout 300))
+              (is (empty? (transcript-events dir "sess-noise")))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest audio-pipeline-debounces-second-turn-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-debounce")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [calls (atom 0)]
+            (with-redefs [whisper/whisper-available? (fn [& _] true)
+                          whisper/transcribe-pcm (fn [_] {:text "hello world again" :segments []})
+                          agent-loop/start-session! (fn [_opts] {:context-dir "x" :conn {}})
+                          agent-loop/close-session! (fn [_] nil)
+                          agent-loop/run-turn! (fn [_session _prompt _line-ch]
+                                                 (swap! calls inc)
+                                                 {:text "ok" :skip? false})]
+              (let [ch (pipelines/ensure-audio-pipeline! sys "sess-debounce")]
+                (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "first")}))
+                (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "second")})))
+              (async/<!! (async/timeout 800))
+              (is (= 2 (count (transcript-events dir "sess-debounce"))))
+              (is (= 1 @calls))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
 (deftest chat-pipeline-survives-throwing-turn-test
   (let [dir (temp-dir)]
     (try
@@ -243,7 +326,7 @@
       (let [sys (system/build-system {:sessions-dir dir})]
         (try
           (with-redefs [whisper/whisper-available? (fn [& _] true)
-                        whisper/transcribe-pcm (fn [_] {:text "fixed text" :segments []})]
+                        whisper/transcribe-pcm (fn [_] {:text "fixed text here" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-h")]
               (swap! (:paused sys) assoc :voice true)
               (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "one")}))
@@ -252,7 +335,7 @@
               (swap! (:paused sys) assoc :voice false)
               (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "two")}))
               (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-h"))))))
-              (is (= "fixed text" (:text (first (transcript-events dir "sess-h")))))))
+              (is (= "fixed text here" (:text (first (transcript-events dir "sess-h")))))))
           (finally
             (system/stop-system sys))))
       (finally

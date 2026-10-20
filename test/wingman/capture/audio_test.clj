@@ -4,7 +4,8 @@
             [wingman.capture.audio :as audio])
   (:import (be.tarsos.dsp AudioEvent SilenceDetector)
            (be.tarsos.dsp.io TarsosDSPAudioFormat)
-           (java.nio ByteBuffer ByteOrder)))
+           (java.nio ByteBuffer ByteOrder)
+           (javax.sound.sampled Line$Info Mixer)))
 
 (deftest silence-detector-default-threshold-test
   (with-redefs [audio/env (constantly nil)]
@@ -72,9 +73,13 @@
     (is (= 256 (alength (second @sent))))))
 
 (deftest start-audio-capture-multi-device-test
-  (with-redefs [audio/dispatcher-for (fn [_send-fn {:keys [mixer]}] (or mixer :default))]
-    (is (= [:default] (audio/start-audio-capture! identity [{:mixer nil :speaker :candidate}])))
-    (is (= [:m1 :m2] (audio/start-audio-capture! identity [{:mixer :m1 :speaker :candidate} {:mixer :m2 :speaker :interviewer}])))))
+  (with-redefs [audio/dispatcher-for (fn [_send-fn {:keys [mixer]}]
+                                       (if mixer
+                                         {:dispatcher mixer :line (str "line-" (name mixer))}
+                                         {:dispatcher :default}))]
+    (is (= [{:dispatcher :default}] (audio/start-audio-capture! identity [{:mixer nil :speaker :candidate}])))
+    (is (= [{:dispatcher :m1 :line "line-m1"} {:dispatcher :m2 :line "line-m2"}]
+           (audio/start-audio-capture! identity [{:mixer :m1 :speaker :candidate} {:mixer :m2 :speaker :interviewer}])))))
 
 (deftest list-devices-returns-vector-test
   (is (vector? (audio/list-devices))))
@@ -93,6 +98,38 @@
         (is (some? (audio/find-mixer substr)))
         (is (some? (audio/find-mixer (str/lower-case substr))))
         (is (some? (audio/find-mixer (str/upper-case substr))))))))
+
+(defn- fake-mixer [supports-target?]
+  (proxy [Mixer] []
+    (getMixerInfo [] nil)
+    (open ([] ()) ([_ _] ()))
+    (close [] ())
+    (isOpen [] false)
+    (getLine [_] nil)
+    (getMaxLines [_] 0)
+    (getSourceLineInfo [] (make-array Line$Info 0))
+    (getTargetLineInfo [] (make-array Line$Info 0))
+    (getSourceLines [] (make-array javax.sound.sampled.Line 0))
+    (getTargetLines [] (make-array javax.sound.sampled.Line 0))
+    (isLineSupported [_] supports-target?)))
+
+(deftest find-mixer-filters-by-target-line-support-test
+  (when-let [mi (first (javax.sound.sampled.AudioSystem/getMixerInfo))]
+    (let [supporting-mixer (fake-mixer true)
+          non-supporting-mixer (fake-mixer false)
+          name (.getName mi)
+          desc (.getDescription mi)
+          substr (subs name 0 (max 1 (count name)))]
+      (with-redefs [audio/mixer-infos (constantly [mi])
+                    audio/mixer-for (fn [_] non-supporting-mixer)]
+        (is (nil? (audio/find-mixer name)))
+        (is (nil? (audio/find-mixer desc)))
+        (is (nil? (audio/find-mixer substr))))
+      (with-redefs [audio/mixer-infos (constantly [mi])
+                    audio/mixer-for (fn [_] supporting-mixer)]
+        (is (= supporting-mixer (audio/find-mixer name)))
+        (is (= supporting-mixer (audio/find-mixer desc)))
+        (is (= supporting-mixer (audio/find-mixer substr)))))))
 
 (deftest downmix-averages-channels-test
   (let [stereo (float-array [0.5 -0.5 1.0 0.0 -1.0 -1.0])

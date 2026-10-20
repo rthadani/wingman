@@ -29,7 +29,14 @@
   (let [out (render ((var renderer/session-item) {:id "s1" :title "Interview"}))]
     (is (str/includes? out "hx-delete=\"/api/session/s1\""))
     (is (str/includes? out "hx-confirm=\"Delete this session?\""))
+    (is (str/includes? out "hx-swap=\"delete\""))
     (is (str/includes? out "✕"))))
+
+(deftest session-item-active-highlight-test
+  (let [out (render ((var renderer/session-item) {:id "s1" :title "Interview"} "s1"))]
+    (is (str/includes? out "bg-slate-700"))
+    (is (str/includes? out "text-white"))
+    (is (not (str/includes? out "hover:bg-slate-800")))))
 
 (deftest transcript-fragment-test
   (let [out (render (renderer/transcript-fragment sample-utterance))]

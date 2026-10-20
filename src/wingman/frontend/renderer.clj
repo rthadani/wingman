@@ -8,17 +8,23 @@
     "text-xs font-semibold text-emerald-700"))
 
 (defn- session-item
-  [s]
-  [:li {:class "px-4 py-2 hover:bg-slate-800 cursor-pointer flex items-center justify-between group"}
-   [:a {:href (str "/session/" (:id s))
-        :class "block flex-1 truncate"}
-    (:title s)]
-   [:button {:class "text-xs text-slate-500 hover:text-red-400 px-1 opacity-0 group-hover:opacity-100"
-             :hx-delete (str "/api/session/" (:id s))
-             :hx-target "closest li"
-             :hx-swap "outerHTML"
-             :hx-confirm "Delete this session?"}
-    "✕"]])
+  ([s] (session-item s nil))
+  ([s active-id]
+   (let [active? (= (:id s) active-id)
+         base "px-4 py-2 cursor-pointer flex items-center justify-between group"
+         classes (if active?
+                   (str base " bg-slate-700 text-white")
+                   (str base " hover:bg-slate-800"))]
+     [:li {:class classes}
+      [:a {:href (str "/session/" (:id s))
+           :class "block flex-1 truncate"}
+       (:title s)]
+      [:button {:class "text-xs text-slate-500 hover:text-red-400 px-1 opacity-0 group-hover:opacity-100"
+                :hx-delete (str "/api/session/" (:id s))
+                :hx-target "closest li"
+                :hx-swap "delete"
+                :hx-confirm "Delete this session?"}
+       "✕"]])))
 
 (defn app-shell
   [sessions]
@@ -86,7 +92,8 @@
     nil))
 
 (defn session-list-fragment
-  [sessions]
-  (h/html
-   [:ul {:id "session-list" :class "text-sm"}
-    (map session-item sessions)]))
+  ([sessions] (session-list-fragment sessions nil))
+  ([sessions active-id]
+   (h/html
+    [:ul {:id "session-list" :class "text-sm"}
+     (map #(session-item % active-id) sessions)])))

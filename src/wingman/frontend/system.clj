@@ -8,6 +8,7 @@
   {:config cfg
    :server nil
    :session-store (atom {})
+   :active-session (atom nil)
    :sse-registry (sse/new-registry)
    :audio-pipelines (atom {})
    :chat-pipelines (atom {})
