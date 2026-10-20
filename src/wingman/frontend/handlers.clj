@@ -3,7 +3,6 @@
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [wingman.frontend.capture :as capture]
             [wingman.frontend.capture-control :as capture-control]
             [wingman.frontend.pipelines :as pipelines]
             [wingman.frontend.renderer :as renderer]
@@ -48,6 +47,18 @@
     {:status 200
      :headers {"Content-Type" "application/json"}
      :body (json/generate-string {:id id})}))
+
+(defn session-delete-handler [{:keys [wingman.frontend/sys] :as req}]
+  (let [id (get-in req [:path-params :id])]
+    (if-not (known-session? sys id)
+      {:status 404 :body "unknown session"}
+      (do
+        (capture-control/status!
+         (get-in sys [:config :capture-url])
+         (fn [st] (when (= id (:session-id st)) (capture-control/stop! (get-in sys [:config :capture-url]))))
+         (fn [_] nil))
+        (io/delete-file (io/file (get-in sys [:config :sessions-dir]) (str id ".edn")) true)
+        {:status 204}))))
 
 (defn capture-stop-handler [{:keys [wingman.frontend/sys]}]
   (capture-control/stop! (get-in sys [:config :capture-url]))
@@ -161,7 +172,7 @@
           speaker (if (and (pos? n) (= 1 (aget b 0))) :interviewer :candidate)
           pcm (if (pos? n) (java.util.Arrays/copyOfRange b 1 n) b)]
       (async/offer! (pipelines/ensure-audio-pipeline! sys session-id)
-                    {:speaker speaker :bytes (capture/pcm->wav pcm)}))
+                    {:speaker speaker :bytes pcm}))
     (let [m (try (json/parse-string message true)
                  (catch Exception _ nil))]
       (when (and (map? m)

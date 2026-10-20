@@ -9,10 +9,16 @@
 
 (defn- session-item
   [s]
-  [:li {:class "px-4 py-2 hover:bg-slate-800 cursor-pointer"}
+  [:li {:class "px-4 py-2 hover:bg-slate-800 cursor-pointer flex items-center justify-between group"}
    [:a {:href (str "/session/" (:id s))
-        :class "block"}
-    (:title s)]])
+        :class "block flex-1 truncate"}
+    (:title s)]
+   [:button {:class "text-xs text-slate-500 hover:text-red-400 px-1 opacity-0 group-hover:opacity-100"
+             :hx-delete (str "/api/session/" (:id s))
+             :hx-target "closest li"
+             :hx-swap "outerHTML"
+             :hx-confirm "Delete this session?"}
+    "✕"]])
 
 (defn app-shell
   [sessions]

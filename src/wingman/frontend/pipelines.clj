@@ -3,7 +3,6 @@
             [clojure.string :as str]
             [hiccup2.core :as h]
             [wingman.frontend.agent :as agent]
-            [wingman.frontend.capture :as capture]
             [wingman.frontend.loop :as agent-loop]
             [wingman.frontend.renderer :as renderer]
             [wingman.frontend.session :as session]
@@ -54,7 +53,7 @@
           (try
             (let [cfg (:config sys)]
               (when (whisper/whisper-available? (:whisper-model cfg))
-                (let [text (str/replace (:text (capture/process-audio-chunk bytes {:model (:whisper-model cfg)})) "\n" " ")]
+                (let [text (str/replace (:text (whisper/transcribe-pcm bytes)) "\n" " ")]
                   (when-not (= "" text)
                     (let [ev (append-transcript! sys session-id text speaker)]
                       (sse/broadcast (:sse-registry sys) session-id "transcript"

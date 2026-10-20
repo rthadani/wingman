@@ -46,3 +46,13 @@
                      (log-err "capture unmute failed:" resp))))
     (catch Exception e
       (log-err "capture unmute failed:" e))))
+
+(defn status! [capture-url on-ok on-err]
+  (try
+    (client/get (str capture-url "/status")
+                (fn [resp]
+                  (if (or (instance? Throwable resp) (not= 200 (:status resp)))
+                    (on-err resp)
+                    (on-ok (json/parse-string (:body resp) true)))))
+    (catch Exception e
+      (on-err e))))

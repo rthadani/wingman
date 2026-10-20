@@ -53,11 +53,11 @@
   (AudioFormat. (float 16000) 16 1 true false))
 
 (def ^:private capture-formats
-  [target-format
-   (AudioFormat. (float 48000) 16 2 true false)
+  [(AudioFormat. (float 48000) 16 2 true false)
    (AudioFormat. (float 48000) 16 1 true false)
    (AudioFormat. (float 44100) 16 2 true false)
-   (AudioFormat. (float 44100) 16 1 true false)])
+   (AudioFormat. (float 44100) 16 1 true false)
+   target-format])
 
 (defn list-devices []
   (into []
@@ -131,6 +131,7 @@
               (let [^TargetDataLine line (.getLine mixer (DataLine$Info. TargetDataLine fmt))]
                 (.open line fmt)
                 (.start line)
+                (println "capture format:" (.getSampleRate fmt) "Hz" (.getChannels fmt) "ch")
                 [line fmt])
               (catch LineUnavailableException _
                 nil))))

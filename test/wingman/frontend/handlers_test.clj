@@ -3,7 +3,6 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [wingman.frontend.capture :as capture]
             [wingman.frontend.capture-control :as capture-control]
             [wingman.frontend.handlers :as handlers]
             [wingman.frontend.loop :as agent-loop]
@@ -38,6 +37,28 @@
         (is (= 200 (:status res)))
         (is (= {:id "sess-123"} (json/parse-string (:body res) true)))
         (is (= [["http://c:7778" "sess-123"]] @calls))))))
+
+(deftest session-delete-handler-test
+  (let [dir (temp-dir)]
+    (try
+      (let [id (:id (session/create-session dir))
+            status-calls (atom [])
+            stop-calls (atom [])]
+        (with-redefs [capture-control/status! (fn [url on-ok _]
+                                                (swap! status-calls conj url)
+                                                (on-ok {:session-id id}))
+                      capture-control/stop! (fn [url] (swap! stop-calls conj url))]
+          (let [sys {:wingman.frontend/sys {:config {:sessions-dir dir :capture-url "http://c:7778"}}}
+                unknown (handlers/session-delete-handler (assoc sys :path-params {:id "no-such"}))
+                ok (handlers/session-delete-handler (assoc sys :path-params {:id id}))]
+            (is (= 404 (:status unknown)))
+            (is (= "unknown session" (:body unknown)))
+            (is (= 204 (:status ok)))
+            (is (not (.exists (io/file dir (str id ".edn")))))
+            (is (= ["http://c:7778"] @status-calls))
+            (is (= ["http://c:7778"] @stop-calls)))))
+      (finally
+        (delete-recursively! dir)))))
 
 (deftest capture-stop-test
   (let [calls (atom [])]
@@ -256,20 +277,18 @@
         sys (system/build-system {:port (free-port) :sessions-dir dir})]
     (try
       (let [id (:id (session/create-session dir))]
-        (testing "binary frame routes wrapped wav into audio pipeline"
+        (testing "binary frame routes raw pcm into audio pipeline"
           (let [chunk (promise)]
             (with-redefs [whisper/whisper-available? (constantly true)
-                          capture/process-audio-chunk
-                          (fn [bytes _opts]
+                          whisper/transcribe-pcm
+                          (fn [bytes]
                             (deliver chunk bytes)
                             {:text "" :segments []})]
               (handlers/handle-ws-frame sys id (byte-array [0 1 2 3 4]))
               (let [delivered (deref chunk 2000 nil)]
                 (is (some? delivered))
-                (is (= 48 (count delivered)))
-                (is (= "RIFF" (String. ^bytes delivered 0 4)))
-                (is (= "WAVE" (String. ^bytes delivered 8 4)))
-                (is (= (vec (byte-array [1 2 3 4])) (vec (drop 44 delivered))))))))
+                (is (= 4 (count delivered)))
+                (is (= (vec (byte-array [1 2 3 4])) (vec delivered)))))))
         (testing "clipboard text frame routes payload into chat pipeline"
           (let [msg (promise)]
             (with-redefs [agent-loop/start-session! (fn [_opts] {:context-dir "x" :conn {}})

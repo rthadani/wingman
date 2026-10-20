@@ -3,7 +3,6 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [wingman.frontend.capture :as capture]
             [wingman.frontend.loop :as agent-loop]
             [wingman.frontend.pipelines :as pipelines]
             [wingman.frontend.session :as session]
@@ -54,7 +53,7 @@
                           http-kit/close (fn [_ch] nil)]
               (sse/register-client (:sse-registry sys) "sess-a" client)
               (with-redefs [whisper/whisper-available? (fn [& _] true)
-                            capture/process-audio-chunk (fn [_ _] {:text "hello world" :segments []})]
+                            whisper/transcribe-pcm (fn [_] {:text "hello world" :segments []})]
                 (let [ch (pipelines/ensure-audio-pipeline! sys "sess-a")]
                   (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "audio-bytes")})))
                 (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-a"))))))
@@ -77,7 +76,7 @@
       (let [sys (system/build-system {:sessions-dir dir})]
         (try
           (with-redefs [whisper/whisper-available? (fn [& _] true)
-                        capture/process-audio-chunk (fn [_ _] {:text "interviewer says" :segments []})]
+                        whisper/transcribe-pcm (fn [_] {:text "interviewer says" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-i")]
               (is (async/offer! ch {:speaker :interviewer :bytes (.getBytes "x")})))
             (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-i"))))))
@@ -244,7 +243,7 @@
       (let [sys (system/build-system {:sessions-dir dir})]
         (try
           (with-redefs [whisper/whisper-available? (fn [& _] true)
-                        capture/process-audio-chunk (fn [_ _] {:text "fixed text" :segments []})]
+                        whisper/transcribe-pcm (fn [_] {:text "fixed text" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-h")]
               (swap! (:paused sys) assoc :voice true)
               (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "one")}))

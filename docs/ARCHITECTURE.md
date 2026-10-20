@@ -51,6 +51,10 @@ The home page is the same HTML with `sse-connect` stripped out, so it is an iner
 
 You copy the interviewer's question. The watch fires, offers `[:clipboard text]` to the sender, the sender ships a text frame over the WebSocket. The frontend's `/ws/session/:id` handler (`http-kit/as-channel` `on-receive` → `handle-ws-frame`) parses it, confirms `type=clipboard.update` and a string payload, and offers the text into the chat pipeline — created lazily on first message via `ensure-chat-pipeline!`.
 
+### Interviewer audio
+
+A second capture device records the interviewer. The first selected device is tagged `:candidate`; every additional device is tagged `:interviewer`. The binary WS frame prefixes PCM with one speaker byte (`0` for candidate, `1` for interviewer). OS-specific loopback/BlackHole recipes are in README.md.
+
 `run-chat-turn` then:
 
 1. Appends the text to the session `.edn` as a `:transcript` event under a per-session lock (the event's `:id` is the running transcript count).

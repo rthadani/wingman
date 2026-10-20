@@ -1,41 +1,55 @@
 (ns wingman.capture.clipboard-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is use-fixtures]]
             [wingman.capture.clipboard :as clipboard])
   (:import (java.awt Toolkit)
            (java.awt.datatransfer StringSelection)))
 
+(def ^:private delivered #'clipboard/delivered)
+
+(defn- reset-state [f]
+  (reset! @delivered #{})
+  (try (f) (finally (clipboard/stop-clipboard-watch!))))
+
+(use-fixtures :each reset-state)
+
 (deftest send-if-new-delivers-new-content-test
-  (let [state {:last-sent (atom nil) :sent-set (atom #{})}
-        sent (atom [])]
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "first")
+  (let [sent (atom [])]
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "first")
     (is (= ["first"] @sent))
-    (is (= "first" @(:last-sent state)))
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "first")
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "first")
     (is (= ["first"] @sent))
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "second")
-    (is (= ["first" "second"] @sent))
-    (is (= "second" @(:last-sent state)))))
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "second")
+    (is (= ["first" "second"] @sent))))
 
 (deftest send-if-new-trims-and-dedupes-test
-  (let [state {:last-sent (atom nil) :sent-set (atom #{})}
-        sent (atom [])]
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "  link  ")
+  (let [sent (atom [])]
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "  link  ")
     (is (= ["link"] @sent))
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "link\n")
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "link\n")
     (is (= ["link"] @sent))
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "\tlink")
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "\tlink")
     (is (= ["link"] @sent))
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "other")
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "other")
     (is (= ["link" "other"] @sent))))
 
 (deftest send-if-new-skips-nil-and-whitespace-test
-  (let [state {:last-sent (atom nil) :sent-set (atom #{})}
-        sent (atom [])]
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) nil)
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "   ")
-    (#'clipboard/send-if-new! state (fn [c] (swap! sent conj c)) "\n\t")
-    (is (= [] @sent))
-    (is (nil? @(:last-sent state)))))
+  (let [sent (atom [])]
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) nil)
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "   ")
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "\n\t")
+    (is (= [] @sent))))
+
+(deftest cross-arm-dedupe-test
+  (let [sent (atom [])]
+    ;; first arm
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "shared-text")
+    (is (= ["shared-text"] @sent))
+    ;; second arm (different send-fn, same process lifetime)
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "shared-text")
+    (is (= ["shared-text"] @sent))
+    ;; new text still flows
+    (#'clipboard/send-if-new! (fn [c] (swap! sent conj c)) "new-text")
+    (is (= ["shared-text" "new-text"] @sent))))
 
 (deftest pre-arm-clipboard-is-sent-on-first-poll-test
   (let [clipboard (-> (Toolkit/getDefaultToolkit) (.getSystemClipboard))
