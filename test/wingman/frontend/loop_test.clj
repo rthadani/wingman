@@ -21,7 +21,7 @@
       (spit marker "x")
       (with-redefs [agent/run-turn! (fn [c prompt _line-ch] (reset! sent [c prompt]) {:text "ok"})]
         (let [res (iloop/run-turn! {:context-dir dir :conn :conn} "prompt" nil)]
-          (is (= {:text "ok" :skip? false} res))
+          (is (= {:text "ok" :skip? false :timeout? false :closed? false} res))
           (is (false? (.exists marker)))
           (is (= [:conn "prompt"] @sent))))
       (finally
@@ -32,7 +32,7 @@
         marker (io/file dir ".skip-suggestion")]
     (try
       (with-redefs [agent/run-turn! (fn [_ _ _] (spit marker "x") {:text ""})]
-        (is (= {:text "" :skip? true} (iloop/run-turn! {:context-dir dir :conn {}} "p" nil))))
+        (is (= {:text "" :skip? true :timeout? false :closed? false} (iloop/run-turn! {:context-dir dir :conn {}} "p" nil))))
       (finally
         (delete-recursively! dir)))))
 
@@ -47,7 +47,7 @@
                     tools/cleanup-context-dir! (fn [_ _] nil)]
         (let [session (iloop/start-session! {:tools-dir "tools" :provider "p" :model "m" :name "n" :pi-bin "pi"})]
           (is (= dir (:context-dir session)))
-          (is (= {:provider "p" :model "m" :name "n" :context-dir dir :pi-bin "pi"} @started))
+          (is (= {:provider "p" :model "m" :name "n" :context-dir dir :pi-bin "pi" :append-system-prompt nil} @started))
           (iloop/close-session! session)
           (is (true? @closed))))
       (finally
@@ -55,3 +55,20 @@
 
 (deftest close-session-nil-test
   (is (nil? (iloop/close-session! nil))))
+
+(deftest start-session-writes-context-file-test
+  (let [dir (temp-dir)
+        started (atom nil)]
+    (try
+      (with-redefs [tools/stage-tools! (fn [_] dir)
+                    agent/start-rpc-session! (fn [opts] (reset! started opts) {:proc :p :in :i :out-ch :o})
+                    tools/cleanup-context-dir! (fn [_ _] nil)]
+        (let [ctx-md "## Interview context\nCompany: Acme\n"
+              session (iloop/start-session! {:tools-dir "tools" :name "n" :context ctx-md})]
+          (is (= dir (:context-dir session)))
+          (let [path (:append-system-prompt @started)]
+            (is (string? path))
+            (is (.isAbsolute (io/file path)))
+            (is (= ctx-md (slurp path))))))
+      (finally
+        (delete-recursively! dir)))))

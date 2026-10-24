@@ -1,5 +1,6 @@
 (ns wingman.frontend.server
-  (:require [wingman.frontend.handlers :as handlers]
+  (:require [ring.middleware.params :as params]
+            [wingman.frontend.handlers :as handlers]
             [org.httpkit.server :as http-kit]
             [reitit.ring :as ring]))
 
@@ -10,6 +11,7 @@
 
 (defn- routes []
   [["/" {:get {:handler handlers/home-handler}}]
+   ["/new" {:get {:handler handlers/new-session-handler}}]
    ["/api/session" {:post {:handler handlers/session-create-handler}}]
    ["/api/capture/stop" {:post {:handler handlers/capture-stop-handler}}]
    ["/api/capture/mute" {:post {:handler handlers/capture-mute-handler}}]
@@ -21,15 +23,18 @@
    ["/api/session/:id" {:delete {:handler handlers/session-delete-handler}}]
    ["/api/session/:id/audio" {:post {:handler handlers/audio-handler}}]
    ["/api/session/:id/chat" {:post {:handler handlers/chat-handler}}]
+   ["/api/session/:id/clear" {:post {:handler handlers/session-clear-handler}}]
+   ["/api/session/:id/context" {:post {:handler handlers/session-context-handler}}]
    ["/api/session/:id/sse" {:get {:handler handlers/sse-handler}}]
    ["/sessions" {:get {:handler handlers/sessions-handler}}]
    ["/session/:id" {:get {:handler handlers/session-handler}}]
    ["/ws/session/:id" {:get {:handler handlers/ws-handler}}]])
 
 (defn- app [sys]
-  (let [rh (ring/ring-handler
-            (ring/router (routes) {:data {:middleware [(sys-middleware sys)]}})
-            (ring/create-default-handler))]
+  (let [rh (params/wrap-params
+            (ring/ring-handler
+             (ring/router (routes) {:data {:middleware [(sys-middleware sys)]}})
+             (ring/create-default-handler)))]
     (fn
       ([req] (rh req))
       ([req respond raise]

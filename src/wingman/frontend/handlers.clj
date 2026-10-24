@@ -3,16 +3,16 @@
             [clojure.core.async :as async]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [ring.middleware.multipart-params :as mp]
+            [ring.middleware.multipart-params.byte-array :as ba]
             [wingman.frontend.capture-control :as capture-control]
             [wingman.frontend.pipelines :as pipelines]
             [wingman.frontend.renderer :as renderer]
             [wingman.frontend.session :as session]
             [wingman.frontend.sse :as sse]
+            [wingman.frontend.uploads :as uploads]
             [wingman.frontend.whisper :as whisper]
             [org.httpkit.server :as http-kit]))
-
-(def ^:private new-session-js
-  "(function(){var b=document.querySelector('button');if(!b){return;}b.addEventListener('click',function(){fetch('/api/session',{method:'POST'}).then(function(r){return r.json();}).then(function(d){location.href='/session/'+d.id;});});})();")
 
 (def ^:private mute-toggle-js
   "(function(){var b=document.getElementById('mute-toggle');if(!b){return;}var muted=false;b.addEventListener('click',function(){muted=!muted;fetch(muted?'/api/capture/mute':'/api/capture/unmute',{method:'POST'});b.textContent=muted?'Unmute':'Mute';b.classList.toggle('bg-red-600',muted);b.classList.toggle('bg-slate-700',!muted);});})();")
@@ -20,8 +20,19 @@
 (def ^:private pause-toggle-js
   "(function(){function setup(kind,paused){var b=document.getElementById('pause-'+kind+'-toggle');if(!b){return;}function paint(){b.textContent=(paused?'Resume ':'Pause ')+kind;b.classList.toggle('bg-amber-600',paused);b.classList.toggle('bg-slate-700',!paused);}b.addEventListener('click',function(){paused=!paused;fetch(paused?'/api/pause/'+kind:'/api/resume/'+kind,{method:'POST'});paint();});paint();}fetch('/api/pause/status').then(function(r){return r.json();}).then(function(s){setup('voice',!!s.voice);setup('text',!!s.text);}).catch(function(){setup('voice',false);setup('text',false);});})();")
 
+(defn- clear-js
+  [id]
+  (str "(function(){var b=document.getElementById('clear-transcript');if(!b){return;}b.addEventListener('click',function(){if(confirm('Clear the transcript for this session?')){fetch('/api/session/" id "/clear',{method:'POST'});}});})();"))
+
+(defn- edit-context-js
+  []
+  "(function(){var b=document.getElementById('edit-context');var p=document.getElementById('context-editor');if(!b||!p){return;}b.addEventListener('click',function(){p.classList.toggle('hidden');});var c=document.getElementById('cancel-context');if(c){c.addEventListener('click',function(){p.classList.add('hidden');});}})();")
+
 (defn- app-html []
   (slurp (io/resource "public/app.html")))
+
+(defn- new-html []
+  (slurp (io/resource "public/new.html")))
 
 (defn- inject-scripts [html scripts]
   (str/replace html "</body>" (str scripts "</body>")))
@@ -39,23 +50,84 @@
    :body (-> (app-html)
              (str/replace "hx-ext=\"sse\" sse-connect=\"/events\"" "")
              (str/replace "SESSION_ID" "NONE")
-             (inject-scripts (str "<script>" new-session-js "</script>" "<script>" mute-toggle-js "</script>" "<script>" pause-toggle-js "</script>")))})
+             (str/replace "<!--CONTEXT_EDITOR-->" "")
+             (inject-scripts (str "<script>" mute-toggle-js "</script>" "<script>" pause-toggle-js "</script>")))})
 
-(defn session-create-handler [{:keys [wingman.frontend/sys]}]
-  (let [ev (session/create-session (get-in sys [:config :sessions-dir]))
-        id (:id ev)]
-    (capture-control/start! (get-in sys [:config :capture-url]) id)
-    (reset! (:active-session sys) id)
-    {:status 200
-     :headers {"Content-Type" "application/json"}
-     :body (json/generate-string {:id id})}))
+(defn- normalize-attachments
+  "Normalises multipart file parts to a seq of {:filename :bytes} maps.
+   Empty file inputs (blank filename and zero bytes) are dropped.
+   The filename is sanitised to basename-only display metadata."
+  [parts]
+  (let [parts (if (map? parts) [parts] parts)
+        parts (filter map? parts)
+        parts (remove #(and (str/blank? (:filename %))
+                            (zero? (count (:bytes %))))
+                      parts)]
+    (mapv #(-> (select-keys % [:bytes])
+               (assoc :filename (uploads/safe-original-name %)))
+          parts)))
+
+(defn- validate-create-session
+  [params attachments]
+  (let [company (some-> (get params "company") str str/trim)]
+    (cond
+      (str/blank? company)
+      {:error "company is required"}
+
+      (not (uploads/within-limits? attachments))
+      {:error "upload limits exceeded (max 10 files, 256 KB each, 1 MB total)"}
+
+      (not (every? uploads/allowed-upload? attachments))
+      {:error "only .md files are allowed"}
+
+      (not (every? uploads/valid-utf8? attachments))
+      {:error "files must be valid UTF-8 without NUL bytes"}
+
+      :else
+      {:ok {:company company
+            :role (get params "role")
+            :topic (get params "topic")
+            :notes (get params "notes")
+            :attachments attachments}})))
+
+(defn session-create-handler* [{:keys [wingman.frontend/sys] :as req}]
+  (let [params (:params req)
+        attachments (normalize-attachments (get params "attachments"))
+        validation (validate-create-session params attachments)]
+    (if-let [err (:error validation)]
+      {:status 400 :body err}
+      (let [{:keys [company role topic notes attachments]} (:ok validation)
+            sessions-dir (get-in sys [:config :sessions-dir])
+            ev (session/create-session sessions-dir
+                                       {:company company
+                                        :role role
+                                        :topic topic
+                                        :notes notes}
+                                       attachments)
+            id (:id ev)]
+        (capture-control/start! (get-in sys [:config :capture-url]) id)
+        (reset! (:active-session sys) id)
+        {:status 303
+         :headers {"Location" (str "/session/" id)}
+         :body ""}))))
+
+(def session-create-handler
+  (mp/wrap-multipart-params
+   session-create-handler*
+   {:store (ba/byte-array-store)}))
+
+(defn new-session-handler [_req]
+  {:status 200
+   :headers {"Content-Type" "text/html"
+             "Cache-Control" "no-store, no-cache, must-revalidate"}
+   :body (new-html)})
 
 (defn session-delete-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)
       {:status 404 :body "unknown session"}
       (do
-        (io/delete-file (io/file (get-in sys [:config :sessions-dir]) (str id ".edn")) true)
+        (session/delete-session! (get-in sys [:config :sessions-dir]) id)
         (capture-control/stop! (get-in sys [:config :capture-url]))
         (reset! (:active-session sys) nil)
         (when-let [entry (get @(:chat-pipelines sys) id)]
@@ -66,6 +138,56 @@
           (swap! (:audio-pipelines sys) dissoc id))
         {:status 200
          :body ""}))))
+
+(defn session-clear-handler [{:keys [wingman.frontend/sys] :as req}]
+  (let [id (get-in req [:path-params :id])]
+    (if-not (known-session? sys id)
+      {:status 404 :body "unknown session"}
+      (try
+        (binding [*out* *err*]
+          (println "clear requested for session" id))
+        (pipelines/clear-session! sys id)
+        {:status 200 :body ""}
+        (catch Exception e
+          (binding [*out* *err*]
+            (println "clear failed for session" id ":" (.getMessage e)))
+          {:status 500 :body (.getMessage e)})))))
+
+(defn- trim-or-nil [s]
+  (let [t (some-> s str str/trim)]
+    (when-not (str/blank? t) t)))
+
+(defn- validate-context-update [params]
+  (let [role (some-> (get params "role") str str/trim)
+        topic (some-> (get params "topic") str str/trim)
+        notes (some-> (get params "notes") str str/trim)]
+    (cond
+      (> (count role) 500)
+      {:error "role must be 500 characters or fewer"}
+
+      (> (count topic) 500)
+      {:error "topic must be 500 characters or fewer"}
+
+      (> (count notes) 4000)
+      {:error "notes must be 4000 characters or fewer"}
+
+      :else
+      {:ok {:role (trim-or-nil role)
+            :topic (trim-or-nil topic)
+            :notes (trim-or-nil notes)}})))
+
+(defn session-context-handler [{:keys [wingman.frontend/sys] :as req}]
+  (let [id (get-in req [:path-params :id])]
+    (if-not (known-session? sys id)
+      {:status 404 :body "unknown session"}
+      (let [validation (validate-context-update (:params req))]
+        (if-let [err (:error validation)]
+          {:status 400 :body err}
+          (do
+            (pipelines/update-context! sys id (:ok validation))
+            {:status 303
+             :headers {"Location" (str "/session/" id)}
+             :body ""}))))))
 
 (defn capture-stop-handler [{:keys [wingman.frontend/sys]}]
   (capture-control/stop! (get-in sys [:config :capture-url]))
@@ -99,8 +221,13 @@
    :body (json/generate-string @(:paused sys))})
 
 (defn sessions-handler [{:keys [wingman.frontend/sys]}]
-  (let [ids (session/list-sessions (get-in sys [:config :sessions-dir]))
-        sessions (mapv (fn [id] {:id id :title id}) ids)]
+  (let [dir (get-in sys [:config :sessions-dir])
+        ids (session/list-sessions dir)
+        sessions (mapv (fn [id]
+                         (let [ctx (session/session-context dir id)]
+                           {:id id
+                            :title (or (some-> (:company ctx) str str/trim not-empty) id)}))
+                       ids)]
     {:status 200
      :headers {"Content-Type" "text/html"}
      :body (str (renderer/session-list-fragment sessions @(:active-session sys)))}))
@@ -109,20 +236,27 @@
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)
       {:status 404 :body "unknown session"}
-      (let [events (session/load-session (get-in sys [:config :sessions-dir]) id)
-            history (apply str (keep renderer/history-fragment events))]
+      (let [dir (get-in sys [:config :sessions-dir])
+            events (session/load-session dir id)
+            transcript-history (apply str (keep renderer/history-fragment (filter #(= :transcript (:type %)) events)))
+            assistant-history (apply str (keep renderer/history-fragment (filter #(= :response (:type %)) events)))
+            ctx (session/session-context dir id)]
         (reset! (:active-session sys) id)
         (capture-control/start! (get-in sys [:config :capture-url]) id)
         {:status 200
          :headers {"Content-Type" "text/html"
                    "Cache-Control" "no-store, no-cache, must-revalidate"}
          :body (-> (app-html)
+                   (str/replace "<!--CONTEXT_HEADER-->" (str (renderer/session-header-fragment ctx)))
+                   (str/replace "<!--CONTEXT_EDITOR-->" (str (renderer/context-editor-fragment id ctx)))
                    (str/replace "sse-connect=\"/events\"" (str "sse-connect=\"/api/session/" id "/sse\""))
                    (str/replace "/api/session/SESSION_ID/chat" (str "/api/session/" id "/chat"))
-                   (str/replace "sse-swap=\"transcript\" hx-swap=\"none\"></div>" (str "sse-swap=\"transcript\" hx-swap=\"none\">" history "</div>"))
-                   (str/replace "sse-swap=\"assistant\" hx-swap=\"beforeend\"></div>" (str "sse-swap=\"assistant\" hx-swap=\"beforeend\">" history "</div>"))
-                   (inject-scripts (str "<script>" new-session-js "</script>" "<script>" mute-toggle-js "</script>" "<script>" pause-toggle-js "</script>")))}))))
-
+                   (str/replace "sse-swap=\"transcript\" hx-swap=\"none\"></div>" (str "sse-swap=\"transcript\" hx-swap=\"none\">" transcript-history "</div>"))
+                   (str/replace "sse-swap=\"assistant\" hx-swap=\"beforeend\"></div>" (str "sse-swap=\"assistant\" hx-swap=\"beforeend\">" assistant-history "</div>"))
+                   (inject-scripts (str "<script>" mute-toggle-js "</script>"
+                                        "<script>" pause-toggle-js "</script>"
+                                        "<script>" (clear-js id) "</script>"
+                                        "<script>" (edit-context-js) "</script>")))}))))
 (defn sse-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)
@@ -150,23 +284,14 @@
           (async/offer! ch {:speaker :candidate :bytes (.readAllBytes body)}))
         {:status 202 :body "accepted"}))))
 
-(defn- parse-form-message [body-str]
-  (when-let [v (->> (str/split body-str #"&")
-                    (map #(str/split % #"=" 2))
-                    (some (fn [[k v]] (when (= "message" k) v))))]
-    (java.net.URLDecoder/decode ^String v "UTF-8")))
-
 (defn chat-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)
       {:status 404 :body "unknown session"}
-      (let [ct (get-in req [:headers "content-type"])
-            form? (and ct (str/starts-with? ct "application/x-www-form-urlencoded"))
-            msg (try
-                  (some-> (:body req)
-                          slurp
-                          (#(if form? (parse-form-message %) (-> % (json/parse-string true) :message))))
-                  (catch Exception _ nil))]
+      (let [msg (or (get-in req [:params "message"])
+                    (try
+                      (some-> (:body req) slurp (json/parse-string true) :message)
+                      (catch Exception _ nil)))]
         (if (not (string? msg))
           {:status 400 :body "expected message"}
           (let [ch (pipelines/ensure-chat-pipeline! sys id)]

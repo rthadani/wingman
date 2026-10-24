@@ -21,3 +21,14 @@
 (deftest bad-env-port-falls-back-to-7777-test
   (with-redefs [config/env (fn [n] (when (= "PORT" n) "not-a-number"))]
     (is (= 7777 (:port (config/load-config {}))))))
+
+(deftest min-audio-dbfs-default-test
+  (is (= -50.0 (:min-audio-dbfs (config/load-config {})))))
+
+(deftest min-audio-dbfs-env-test
+  (with-redefs [config/env (fn [n] (when (= "MIN_AUDIO_DBFS" n) "-45.5"))]
+    (is (= -45.5 (:min-audio-dbfs (config/load-config {}))))))
+
+(deftest bad-min-audio-dbfs-falls-back-test
+  (with-redefs [config/env (fn [n] (when (= "MIN_AUDIO_DBFS" n) "not-a-number"))]
+    (is (= -50.0 (:min-audio-dbfs (config/load-config {}))))))

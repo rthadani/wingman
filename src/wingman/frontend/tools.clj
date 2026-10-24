@@ -25,6 +25,11 @@
         (when (.exists src)
           (.mkdirs (.getParentFile dst))
           (io/copy src dst))))
+    (let [ext-src (io/file "resources" "extensions" "web-search.ts")
+          ext-dst (io/file context-dir "extensions" "web-search.ts")]
+      (when (.exists ext-src)
+        (.mkdirs (.getParentFile ext-dst))
+        (io/copy ext-src ext-dst)))
     (let [agent-md (io/file "AGENT.md")]
       (when (.exists agent-md)
         (io/copy agent-md (io/file context-dir "AGENT.md"))))

@@ -9,12 +9,19 @@
     (catch NumberFormatException _
       nil)))
 
+(defn- parse-double-safe [s]
+  (try
+    (Double/parseDouble s)
+    (catch NumberFormatException _ nil)
+    (catch NullPointerException _ nil)))
+
 (defn load-config [opts]
   (merge {:port (or (parse-long-safe (env "PORT")) 7777)
           :pi-bin (or (env "PI_BIN") "pi")
           :provider (env "PI_PROVIDER")
           :model (env "PI_MODEL")
           :whisper-model (or (env "WHISPER_MODEL") "models/ggml-base.en.bin")
+          :min-audio-dbfs (or (parse-double-safe (env "MIN_AUDIO_DBFS")) -50.0)
           :sessions-dir "data/sessions"
           :tools-dir "tools"
           :archive-dir "data/archive"

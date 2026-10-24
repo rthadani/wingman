@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>New Session — Wingman Interview</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="h-screen flex flex-col bg-slate-100 text-slate-800">
+  <main class="flex-1 flex items-center justify-center p-4">
+    <form action="/api/session" method="post" enctype="multipart/form-data"
+          class="w-full max-w-xl bg-white rounded-lg shadow p-6 space-y-4">
+      <h1 class="text-xl font-semibold">Start a new interview session</h1>
+      <div>
+        <label class="block text-sm font-medium">Company <span class="text-red-500">*</span></label>
+        <input type="text" name="company" required
+               class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border">
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Role</label>
+        <input type="text" name="role"
+               class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border">
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Topic</label>
+        <input type="text" name="topic"
+               class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border">
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Notes</label>
+        <textarea name="notes" rows="4"
+                  class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"></textarea>
+      </div>
+      <div>
+        <label class="block text-sm font-medium">Attachments (.md only)</label>
+        <input type="file" name="attachments" multiple accept=".md"
+               class="mt-1 block w-full text-sm">
+        <p class="text-xs text-slate-500 mt-1">Max 10 files, 256 KB each, 1 MB total.</p>
+      </div>
+      <div class="flex justify-between items-center pt-2">
+        <a href="/" class="text-sm text-indigo-600 hover:underline">Back</a>
+        <button type="submit"
+                class="text-sm bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-500">
+          Start session
+        </button>
+      </div>
+    </form>
+  </main>
+</body>
+</html>

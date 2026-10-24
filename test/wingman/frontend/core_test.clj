@@ -35,18 +35,19 @@
       (let [base (str "http://localhost:" port)
             sessions (deref (http/get (str base "/sessions")))
             created (with-redefs [capture-control/start! (fn [_ _] nil)]
-                      (deref (http/post (str base "/api/session"))))
-            id (let [body (:body created)]
-                 (if (map? body)
-                   (:id body)
-                   (:id (json/parse-string (str body) true))))
-            page (deref (http/get (str base "/session/" id)))]
+                      (deref (http/post (str base "/api/session")
+                                        {:form-params {"company" "Acme"}
+                                         :follow-redirects false})))
+            id (some-> (get-in created [:headers :location])
+                       (str/split #"/")
+                       last)]
         (is (= 200 (:status sessions)))
         (is (str/includes? (str (:body sessions)) "session-list"))
-        (is (= 200 (:status created)))
+        (is (= 303 (:status created)))
         (is (string? id))
-        (is (= 200 (:status page)))
-        (is (str/includes? (str (:body page)) (str "/api/session/" id "/sse"))))
+        (let [page (deref (http/get (str base "/session/" id)))]
+          (is (= 200 (:status page)))
+          (is (str/includes? (str (:body page)) (str "/api/session/" id "/sse")))))
       (finally
         (system/stop-system sys)
         (delete-recursively! dir)

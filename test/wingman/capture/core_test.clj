@@ -16,7 +16,16 @@
   (is (= [{:name "mic" :speaker :interviewer} {:name "plughw:3" :speaker nil}]
          (core/env-device-names "mic=interviewer,plughw:3")))
   (is (= [{:name "Mic" :speaker :candidate}]
-         (core/env-device-names "Mic=CANDIDATE"))))
+         (core/env-device-names "Mic=CANDIDATE")))
+  (is (= [{:name "plughw:4,0" :speaker :candidate}
+          {:name "plughw:3,0" :speaker :interviewer}]
+         (core/env-device-names "plughw:4,0=candidate,plughw:3,0=interviewer")))
+  (is (= [{:name "plughw:4" :speaker :candidate}
+          {:name "plughw:3" :speaker :interviewer}]
+         (core/env-device-names "plughw:4=candidate,plughw:3=interviewer")))
+  (is (= [{:name "plughw:4,0" :speaker nil}
+          {:name "plughw:3,0" :speaker nil}]
+         (core/env-device-names "plughw:4,0,plughw:3,0"))))
 
 (deftest parse-selection-line-test
   (let [devices [{:name "Mic"} {:name "BlackHole"} {:name "Loopback"}]]

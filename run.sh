@@ -30,7 +30,9 @@ case "$CMD" in
 esac
 
 # ----- configuration (override by exporting before running) -----
-export WHISPER_MODEL="${WHISPER_MODEL:-$PWD/models/ggml-base.en.bin}"
+# WHISPER_MODEL_FILE overrides the model; WHISPER_MODEL is ignored on purpose.
+export WHISPER_MODEL="${WHISPER_MODEL_FILE:-$PWD/models/ggml-medium.en.bin}"
+echo "whisper model: $WHISPER_MODEL"
 export PI_PROVIDER="${PI_PROVIDER:-failover}"
 export PI_MODEL="${PI_MODEL:-kimi-k2.7-code}"
 export CAPTURE_DEVICES="${CAPTURE_DEVICES:-plughw:4,0=candidate,plughw:3,0=interviewer}"

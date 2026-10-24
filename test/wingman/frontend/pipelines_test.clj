@@ -23,6 +23,14 @@
   (spit (io/file dir (str id ".edn"))
         (prn-str {:type :session-created :id id})))
 
+(defn- loud-bytes []
+  "A loud PCM16 chunk that passes the -50 dBFS energy gate."
+  (byte-array [0xFF 0x7F 0x00 0x80 0xFF 0x7F 0x00 0x80]))
+
+(defn- quiet-bytes []
+  "Silence that should be dropped by the energy gate."
+  (byte-array 64))
+
 (defn- poll-for
   [timeout-ms pred]
   (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
@@ -55,7 +63,7 @@
               (with-redefs [whisper/whisper-available? (fn [& _] true)
                             whisper/transcribe-pcm (fn [_] {:text "hello world today" :segments []})]
                 (let [ch (pipelines/ensure-audio-pipeline! sys "sess-a")]
-                  (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "audio-bytes")})))
+                  (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)})))
                 (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-a"))))))
                 (let [ev (first (transcript-events dir "sess-a"))]
                   (is (= "hello world today" (:text ev)))
@@ -78,7 +86,7 @@
           (with-redefs [whisper/whisper-available? (fn [& _] true)
                         whisper/transcribe-pcm (fn [_] {:text "interviewer says hello" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-i")]
-              (is (async/offer! ch {:speaker :interviewer :bytes (.getBytes "x")})))
+              (is (async/offer! ch {:speaker :interviewer :bytes (loud-bytes)})))
             (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-i"))))))
             (is (= :interviewer (:speaker (first (transcript-events dir "sess-i"))))))
           (finally
@@ -94,7 +102,7 @@
         (try
           (with-redefs [whisper/whisper-available? (fn [& _] false)]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-b")]
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "audio-bytes")})))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)})))
             (async/<!! (async/timeout 300))
             (is (empty? (transcript-events dir "sess-b"))))
           (finally
@@ -221,19 +229,19 @@
           (with-redefs [whisper/whisper-available? (fn [& _] true)
                         whisper/transcribe-pcm (fn [_] {:text "[BLANK_AUDIO]" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise1")}))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
               (async/<!! (async/timeout 300))
               (is (empty? (transcript-events dir "sess-noise")))))
           (with-redefs [whisper/whisper-available? (fn [& _] true)
                         whisper/transcribe-pcm (fn [_] {:text "(wind blowing) (wind blowing) [BLANK_AUDIO]" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise2")}))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
               (async/<!! (async/timeout 300))
               (is (empty? (transcript-events dir "sess-noise")))))
           (with-redefs [whisper/whisper-available? (fn [& _] true)
                         whisper/transcribe-pcm (fn [_] {:text "..." :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-noise")]
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "noise3")}))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
               (async/<!! (async/timeout 300))
               (is (empty? (transcript-events dir "sess-noise")))))
           (finally
@@ -256,8 +264,8 @@
                                                  (swap! calls inc)
                                                  {:text "ok" :skip? false})]
               (let [ch (pipelines/ensure-audio-pipeline! sys "sess-debounce")]
-                (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "first")}))
-                (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "second")})))
+                (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
+                (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)})))
               (async/<!! (async/timeout 800))
               (is (= 2 (count (transcript-events dir "sess-debounce"))))
               (is (= 1 @calls))))
@@ -285,6 +293,39 @@
                 (is (async/offer! ch "second")))
               (is (pos? (count (poll-for 5000 #(seq (response-events dir "sess-e"))))))
               (is (= "recovered" (:text (first (response-events dir "sess-e")))))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest chat-pipeline-closed-child-resets-and-starts-fresh-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-closed")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [started (atom 0)
+                closed (atom [])
+                run-count (atom 0)]
+            (with-redefs [agent-loop/start-session! (fn [_opts]
+                                                       (swap! started inc)
+                                                       {:context-dir (str "closed-child-" @started) :conn {}})
+                          agent-loop/close-session! (fn [session]
+                                                       (swap! closed conj (:context-dir session)))
+                          agent-loop/run-turn! (fn [_session _prompt _line-ch]
+                                                  (swap! run-count inc)
+                                                  (if (= 1 @run-count)
+                                                    {:text "" :skip? false :closed? true}
+                                                    {:text "recovered" :skip? false :closed? false}))]
+              (let [ch (pipelines/ensure-chat-pipeline! sys "sess-closed")]
+                (is (async/offer! ch "first"))
+                (is (async/offer! ch "second")))
+              (is (pos? (count (poll-for 5000 #(seq (response-events dir "sess-closed"))))))
+              (is (= 1 (count (response-events dir "sess-closed"))))
+              (is (= "recovered" (:text (first (response-events dir "sess-closed")))))
+              (is (= 2 @run-count))
+              (is (= 2 @started))
+              (is (= ["closed-child-1"] (filter #(= "closed-child-1" %) @closed)))))
           (finally
             (system/stop-system sys))))
       (finally
@@ -329,11 +370,11 @@
                         whisper/transcribe-pcm (fn [_] {:text "fixed text here" :segments []})]
             (let [ch (pipelines/ensure-audio-pipeline! sys "sess-h")]
               (swap! (:paused sys) assoc :voice true)
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "one")}))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
               (async/<!! (async/timeout 300))
               (is (empty? (transcript-events dir "sess-h")))
               (swap! (:paused sys) assoc :voice false)
-              (is (async/offer! ch {:speaker :candidate :bytes (.getBytes "two")}))
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)}))
               (is (pos? (count (poll-for 3000 #(seq (transcript-events dir "sess-h"))))))
               (is (= "fixed text here" (:text (first (transcript-events dir "sess-h")))))))
           (finally
@@ -359,6 +400,179 @@
               (is (async/offer! ch "live question"))
               (is (pos? (count (poll-for 3000 #(seq (response-events dir "sess-i"))))))
               (is (= "x" (:text (first (response-events dir "sess-i")))))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest audio-pipeline-energy-gate-drops-quiet-chunk-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-quiet")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [calls (atom 0)]
+            (with-redefs [whisper/whisper-available? (fn [& _] true)
+                          whisper/transcribe-pcm (fn [_] (swap! calls inc) {:text "should not run" :segments []})]
+              (let [ch (pipelines/ensure-audio-pipeline! sys "sess-quiet")]
+                (is (async/offer! ch {:speaker :candidate :bytes (quiet-bytes)})))
+              (async/<!! (async/timeout 300))
+              (is (zero? @calls))
+              (is (empty? (transcript-events dir "sess-quiet")))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest audio-pipeline-drops-hallucinated-text-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-ghost")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (with-redefs [whisper/whisper-available? (fn [& _] true)
+                        whisper/transcribe-pcm (fn [_] {:text "Thank you for watching." :segments []})]
+            (let [ch (pipelines/ensure-audio-pipeline! sys "sess-ghost")]
+              (is (async/offer! ch {:speaker :candidate :bytes (loud-bytes)})))
+            (async/<!! (async/timeout 300))
+            (is (empty? (transcript-events dir "sess-ghost"))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest clear-transcript-consumer-closes-child-and-does-not-respawn-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-clear")
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [started (atom 0)
+                closed (atom [])
+                clears (atom 0)]
+            ;; record which child was closed: other consumer threads from earlier
+            ;; tests may also call close-session! on the shared var
+            (with-redefs [agent-loop/start-session! (fn [_opts]
+                                                       (swap! started inc)
+                                                       {:context-dir "clear-test-child" :conn {}})
+                          agent-loop/close-session! (fn [session]
+                                                       (swap! closed conj (:context-dir session)))
+                          agent-loop/run-turn! (fn [_session _prompt _line-ch]
+                                                  (async/<!! (async/timeout 2000))
+                                                  {:text "ok" :skip? true})
+                          sse/broadcast (fn [_reg _sid evt _data]
+                                          (when (= "clear" evt) (swap! clears inc)))]
+              (let [ch (pipelines/ensure-chat-pipeline! sys "sess-clear")
+                    clear-ch (:clear (get @(:chat-pipelines sys) "sess-clear"))]
+                (async/offer! ch "first")
+                (async/<!! (async/timeout 100))
+                (async/offer! clear-ch :clear))
+              ;; wait for the clear broadcast: it is sent after the transcript trim
+              (is (true? (poll-for 5000 #(= 1 @clears))))
+              (is (= 1 (count (filter #{"clear-test-child"} @closed))))
+              (is (= 1 @started))
+              (let [events (session/load-session dir "sess-clear")]
+                (is (= 1 (count events)))
+                (is (= :session-created (:type (first events)))))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest clear-session-with-pipeline-offers-clear-message-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-clear-msg")
+      (let [sys (system/build-system {:sessions-dir dir})
+            ch (async/chan 1)
+            clear-ch (async/chan (async/sliding-buffer 1))]
+        (try
+          (swap! (:chat-pipelines sys) assoc "sess-clear-msg" {:ch ch :clear clear-ch})
+          (with-redefs [sse/broadcast (fn [_reg _sid _evt _data]
+                                         (throw (ex-info "should not broadcast" {})))]
+            (pipelines/clear-session! sys "sess-clear-msg")
+            (is (= :clear (async/<!! clear-ch))))
+          (finally
+            (async/close! ch)
+            (async/close! clear-ch)
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest clear-session-without-pipeline-trims-file-and-broadcasts-test
+  (let [dir (temp-dir)]
+    (try
+      (seed-session! dir "sess-clear-nopipe")
+      (session/append-event dir "sess-clear-nopipe" {:type :transcript :speaker :candidate :text "x" :id 1 :ts "t1"})
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [broadcasts (atom [])]
+            (with-redefs [sse/broadcast (fn [_reg sid evt data]
+                                           (swap! broadcasts conj [sid evt data]))]
+              (pipelines/clear-session! sys "sess-clear-nopipe")
+              (is (= [["sess-clear-nopipe" "clear" ""]] @broadcasts))
+              (let [events (session/load-session dir "sess-clear-nopipe")]
+                (is (= 1 (count events)))
+                (is (= :session-created (:type (first events)))))
+              (is (nil? (get @(var-get #'wingman.frontend.pipelines/last-audio-turn) "sess-clear-nopipe")))
+              (is (= :idle (get @(:stats sys) :turn-state)))
+              (is (nil? (get @(:stats sys) :last-turn)))))
+          (finally
+            (system/stop-system sys))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest update-context-consumer-closes-child-and-keeps-transcript-test
+  (let [dir (temp-dir)]
+    (try
+      (spit (io/file dir "sess-ctx.edn")
+            (prn-str {:type :session-created
+                      :id "sess-ctx"
+                      :meta {:company "Acme" :role "Dev" :topic "Clojure" :notes "notes"}}))
+      (session/append-event dir "sess-ctx" {:type :transcript :speaker :candidate :text "keep me" :id 1 :ts "t1"})
+      (let [sys (system/build-system {:sessions-dir dir})]
+        (try
+          (let [started (atom 0)
+                closed (atom [])
+                run-count (atom 0)
+                contexts (atom [])
+                broadcasts (atom [])
+                turn-started (promise)]
+            (with-redefs [agent-loop/start-session! (fn [opts]
+                                                      (swap! started inc)
+                                                      (swap! contexts conj (:context opts))
+                                                      {:context-dir (str "ctx-child-" @started) :conn {}})
+                          agent-loop/close-session! (fn [session]
+                                                      (swap! closed conj (:context-dir session)))
+                          agent-loop/run-turn! (fn [_session _prompt _line-ch]
+                                                 (swap! run-count inc)
+                                                 (when-not (realized? turn-started)
+                                                   (deliver turn-started true))
+                                                 (async/<!! (async/timeout 600))
+                                                 {:text (str "reply-" @run-count) :skip? false})
+                          sse/broadcast (fn [_reg _sid evt _data]
+                                          (when (= "clear" evt) (swap! broadcasts conj evt)))]
+              (let [ch (pipelines/ensure-chat-pipeline! sys "sess-ctx")
+                    clear-ch (:clear (get @(:chat-pipelines sys) "sess-ctx"))]
+                (async/offer! ch "first")
+                (is (deref turn-started 2000 false) "first turn should start")
+                (session/update-session-context! dir "sess-ctx" {:role "Senior Dev" :topic "Java" :notes "updated"})
+                (async/offer! clear-ch :context)
+                (async/offer! ch "second")
+                (is (true? (poll-for 5000 #(<= 2 @run-count))))
+                (async/<!! (async/timeout 100))
+                (is (= 1 (count (filter #{"ctx-child-1"} @closed))))
+                (is (= 2 @started))
+                (is (= 0 (count @broadcasts)))
+                (let [events (session/load-session dir "sess-ctx")
+                      texts (map :text events)]
+                  (is (some #(= "keep me" %) texts) "original transcript preserved")
+                  (is (= :session-created (:type (first events)))))
+                (let [second-context (second @contexts)]
+                  (is (some? second-context))
+                  (is (str/includes? second-context "Role: Senior Dev"))
+                  (is (str/includes? second-context "Topic: Java"))
+                  (is (str/includes? second-context "Notes: updated"))))))
           (finally
             (system/stop-system sys))))
       (finally

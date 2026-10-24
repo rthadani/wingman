@@ -46,7 +46,7 @@ window.renderAssistantMarkdown = function(root){
   <aside id="sessions-sidebar" class="w-[260px] flex-none bg-slate-900 text-slate-200 flex flex-col" data-panel="sessions">
     <div class="px-4 py-3 text-sm font-semibold tracking-wide text-slate-100 border-b border-slate-700">
       Sessions
-      <button class="float-right text-xs bg-indigo-600 hover:bg-indigo-500 px-2 py-0.5 rounded">+ New</button>
+      <a href="/new" class="float-right text-xs bg-indigo-600 hover:bg-indigo-500 px-2 py-0.5 rounded">+ New</a>
     </div>
     <nav class="flex-1 overflow-y-auto text-sm">
       <ul id="session-list" hx-get="/sessions" hx-trigger="load" hx-swap="innerHTML"></ul>
@@ -54,6 +54,7 @@ window.renderAssistantMarkdown = function(root){
   </aside>
 
   <div class="flex-1 min-w-0 flex flex-col">
+    <!--CONTEXT_HEADER-->
     <main id="transcript-panel" class="h-[30%] min-h-0 flex-none flex flex-col bg-white" data-panel="transcript">
       <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold">Transcript</div>
       <div class="flex-1 overflow-y-auto p-4 space-y-3" sse-swap="transcript" hx-swap="none"></div>
@@ -64,7 +65,8 @@ window.renderAssistantMarkdown = function(root){
       <div id="assistant-output" class="flex-1 overflow-y-auto p-4"
            sse-swap="assistant" hx-swap="beforeend"></div>
       <form id="chat-form" class="p-3 border-t border-slate-200 flex gap-2"
-            hx-post="/api/session/SESSION_ID/chat" hx-swap="none">
+            hx-post="/api/session/SESSION_ID/chat" hx-swap="none"
+            hx-on::after-request="this.reset()">
         <input type="text" name="message" autocomplete="off"
                class="flex-1 text-sm rounded border-slate-300" placeholder="Type a message…">
         <button type="submit" class="text-xs bg-indigo-600 text-white px-3 rounded">Send</button>
@@ -84,6 +86,8 @@ window.renderAssistantMarkdown = function(root){
   <button id="mute-toggle" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Mute</button>
   <button id="pause-voice-toggle" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Pause voice</button>
   <button id="pause-text-toggle" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Pause text</button>
+  <button id="clear-transcript" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Clear transcript</button>
+  <button id="edit-context" class="text-xs bg-slate-700 hover:bg-slate-600 px-2 py-0.5 rounded">Edit context</button>
   <span id="session-timer" class="font-mono">00:00:00</span>
 </footer>
 
@@ -134,5 +138,21 @@ window.renderAssistantMarkdown = function(root){
 })();
 </script>
 
+<!--CONTEXT_EDITOR-->
+
+<!-- subscribes to the SSE "clear" event so htmx fires htmx:sseMessage for it -->
+<div sse-swap="clear" hx-swap="none" hidden></div>
+<script>
+(function(){
+  document.body.addEventListener('htmx:sseMessage', function(e){
+    if (e.detail && e.detail.type === 'clear') {
+      var tc = document.querySelector('[sse-swap="transcript"]');
+      if (tc) tc.innerHTML = '';
+      var ao = document.getElementById('assistant-output');
+      if (ao) ao.innerHTML = '';
+    }
+  });
+})();
+</script>
 </body>
 </html>

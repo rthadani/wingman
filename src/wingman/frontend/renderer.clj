@@ -1,5 +1,6 @@
 (ns wingman.frontend.renderer
-  (:require [hiccup2.core :as h]))
+  (:require [clojure.string :as str]
+            [hiccup2.core :as h]))
 
 (defn- speaker-class
   [speaker]
@@ -97,3 +98,44 @@
    (h/html
     [:ul {:id "session-list" :class "text-sm"}
      (map #(session-item % active-id) sessions)])))
+
+(defn- context-value [v]
+  (or v ""))
+
+(defn session-header-fragment
+  "One-line header showing company, role and topic, omitting blank values."
+  [{:keys [company role topic]}]
+  (let [parts (remove str/blank? [(context-value company) (context-value role) (context-value topic)])
+        text (str/join " · " parts)]
+    (h/html
+     [:div {:id "session-header" :class "px-4 py-2 bg-slate-50 border-b border-slate-200 text-sm text-slate-700"}
+      text])))
+
+(defn context-editor-fragment
+  "Form for editing role, topic and notes after the session has started."
+  [id {:keys [role topic notes]}]
+  (h/html
+   [:div {:id "context-editor" :class "hidden px-4 py-3 bg-white border-b border-slate-200"}
+    [:form {:action (str "/api/session/" id "/context") :method "post" :class "space-y-3"}
+     [:div
+      [:label {:class "block text-sm font-medium"} "Role"]
+      [:input {:type "text" :name "role" :value (context-value role)
+               :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}]]
+     [:div
+      [:label {:class "block text-sm font-medium"} "Topic"]
+      [:input {:type "text" :name "topic" :value (context-value topic)
+               :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}]]
+     [:div
+      [:label {:class "block text-sm font-medium"} "Notes"]
+      [:textarea {:name "notes" :rows 4
+                  :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}
+       (context-value notes)]]
+     [:p {:class "text-xs text-amber-600"}
+      "Saving restarts the assistant's conversation memory from the next reply."]
+     [:div {:class "flex gap-2"}
+      [:button {:type "submit"
+                :class "text-xs bg-indigo-600 text-white px-3 py-1.5 rounded hover:bg-indigo-500"}
+       "Save"]
+      [:button {:type "button" :id "cancel-context"
+                :class "text-xs bg-slate-200 text-slate-800 px-3 py-1.5 rounded hover:bg-slate-300"}
+       "Cancel"]]]]))

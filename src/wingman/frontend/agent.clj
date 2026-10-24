@@ -24,21 +24,38 @@
         (reset! carry (last parts)))
       (reset! carry s))))
 
-(defn start-rpc-session!
-  [{:keys [provider model name context-dir pi-bin]}]
+(defn build-rpc-args
+  [{:keys [provider model name context-dir pi-bin append-system-prompt home]}]
   (let [skill-dirs ["system-design-interview" "engineering-pilot"]
         skill-flags (mapcat (fn [d]
                               (let [p (io/file context-dir "skills" d "SKILL.md")]
                                 (when (.exists p)
                                   ["--skill" (str context-dir "/skills/" d)])))
                             skill-dirs)
-        args (cond-> [(or pi-bin (System/getenv "PI_BIN") "pi") "--mode" "rpc"]
-               provider (into ["--provider" provider])
-               model (into ["--model" model])
-               name (into ["--name" name])
-               true (into ["--no-skills" "--no-prompt-templates" "--tools" "bash"])
-               true (into skill-flags))
-        pb (ProcessBuilder. args)]
+        extension-path (io/file context-dir "extensions" "web-search.ts")
+        home (or home (System/getenv "HOME") (System/getProperty "user.home"))
+        provider-extensions (when home
+                              [(io/file home ".pi" "agent" "npm" "node_modules" "pi-claude-bridge" "src" "index.ts")
+                               (io/file home ".pi" "agent" "git" "github.com" "rthadani" "pi-failover" "extensions" "failover.ts")])]
+    (cond-> [(or pi-bin (System/getenv "PI_BIN") "pi") "--mode" "rpc"]
+      true (into ["--no-extensions" "--no-context-files"])
+      provider (into ["--provider" provider])
+      model (into ["--model" model])
+      name (into ["--name" name])
+      append-system-prompt (into ["--append-system-prompt" append-system-prompt])
+      true (into ["--no-skills" "--no-prompt-templates" "--no-mcp" "--tools" "interview_web_search"])
+      (seq provider-extensions) (into (mapcat (fn [^File f]
+                                                (when (.exists f)
+                                                  ["-e" (str f)]))
+                                              provider-extensions))
+      (.exists extension-path) (into ["--extension" (str extension-path)])
+      true (into skill-flags))))
+
+(defn start-rpc-session!
+  [opts]
+  (let [args (build-rpc-args opts)
+        pb (ProcessBuilder. args)
+        context-dir (:context-dir opts)]
     (.directory pb (File. ^String context-dir))
     (.redirectErrorStream pb true)
     (let [^Process proc (.start pb)
@@ -50,8 +67,10 @@
                       (with-open [rdr (BufferedReader. (InputStreamReader. (.getInputStream proc)))]
                         (loop [line (.readLine rdr)]
                           (when line
-                            (when-let [ev (try (json/parse-string line true) (catch Exception _ nil))]
-                              (async/>!! out-ch ev))
+                            (if-let [ev (try (json/parse-string line true) (catch Exception _ nil))]
+                              (async/>!! out-ch ev)
+                              (binding [*out* *err*]
+                                (println "pi:" line)))
                             (recur (.readLine rdr)))))
                       (catch Exception _))
                     (async/close! out-ch)
@@ -73,10 +92,17 @@
   (let [sb (StringBuilder.)
         carry (atom "")]
     (loop []
-      (let [ev (async/<!! out-ch)]
-        (if (nil? ev)
+      (let [[ev ch] (async/alts!! [out-ch (async/timeout 90000)])]
+        (cond
+          (and (nil? ev) (not (identical? ch out-ch)))
           (do (when (seq @carry) (async/>!! line-ch @carry))
-              {:text (str sb)})
+              {:text (str sb) :timeout? true})
+
+          (nil? ev)
+          (do (when (seq @carry) (async/>!! line-ch @carry))
+              {:text (str sb) :closed? true})
+
+          :else
           (let [t (:type ev)]
             (when (= "message_update" t)
               (let [e (:assistantMessageEvent ev)]

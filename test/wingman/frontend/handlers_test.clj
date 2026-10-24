@@ -7,6 +7,7 @@
             [wingman.frontend.capture-control :as capture-control]
             [wingman.frontend.handlers :as handlers]
             [wingman.frontend.loop :as agent-loop]
+            [wingman.frontend.pipelines :as pipelines]
             [wingman.frontend.session :as session]
             [wingman.frontend.sse :as sse]
             [wingman.frontend.system :as system]
@@ -29,18 +30,100 @@
   (let [b (:body res)]
     (if (string? b) b (str b))))
 
+(defn- section-between
+  "Text of body after `start` and before the next `end`; nil when a marker is missing."
+  [body start end]
+  (when-let [from (str/index-of body start)]
+    (let [begin (+ from (count start))]
+      (when-let [to (str/index-of body end begin)]
+        (subs body begin to)))))
+
+(defn- occurrences [text s]
+  (count (re-seq (re-pattern (java.util.regex.Pattern/quote s)) text)))
+
 (deftest session-create-triggers-capture-test
-  (let [calls (atom [])]
-    (with-redefs [session/create-session (fn [_] {:id "sess-123"})
+  (let [calls (atom [])
+        created (atom nil)]
+    (with-redefs [session/create-session (fn [dir meta attachments]
+                                           (reset! created [dir meta attachments])
+                                           {:id "sess-123"})
                   capture-control/start! (fn [url id] (swap! calls conj [url id]))]
       (let [active (atom nil)
-            res (handlers/session-create-handler
-                 {:wingman.frontend/sys {:config {:sessions-dir "x" :capture-url "http://c:7778"}
-                                         :active-session active}})]
-        (is (= 200 (:status res)))
-        (is (= {:id "sess-123"} (json/parse-string (:body res) true)))
+            req {:wingman.frontend/sys {:config {:sessions-dir "x" :capture-url "http://c:7778"}
+                                        :active-session active}
+                 :params {"company" "Acme" "role" "Dev" "topic" "Clojure"
+                          "notes" "notes"}}
+            res (handlers/session-create-handler* req)]
+        (is (= 303 (:status res)))
+        (is (= "/session/sess-123" (get-in res [:headers "Location"])))
+        (is (= ["x" {:company "Acme" :role "Dev" :topic "Clojure" :notes "notes"} []]
+               @created))
         (is (= [["http://c:7778" "sess-123"]] @calls))
         (is (= "sess-123" @active))))))
+
+(deftest session-create-rejects-missing-company-test
+  (let [res (handlers/session-create-handler*
+             {:wingman.frontend/sys {:config {:sessions-dir "x"}}
+              :params {"role" "Dev"}})]
+    (is (= 400 (:status res)))
+    (is (= "company is required" (:body res)))))
+
+(deftest session-create-rejects-invalid-upload-test
+  (let [res (handlers/session-create-handler*
+             {:wingman.frontend/sys {:config {:sessions-dir "x"}}
+              :params {"company" "Acme"
+                       "attachments" {:filename "evil.exe" :bytes (.getBytes "x")}}})]
+    (is (= 400 (:status res)))
+    (is (clojure.string/includes? (:body res) ".md"))))
+
+(deftest session-create-accepts-empty-attachment-map-test
+  (let [created (atom nil)]
+    (with-redefs [session/create-session (fn [dir meta attachments]
+                                           (reset! created [dir meta attachments])
+                                           {:id "sess-123"})]
+      (let [res (handlers/session-create-handler*
+                 {:wingman.frontend/sys {:config {:sessions-dir "x"}
+                                         :active-session (atom nil)}
+                  :params {"company" "Acme"
+                           "attachments" {:filename "" :bytes (byte-array 0)}}})]
+        (is (= 303 (:status res)))
+        (is (= [] (nth @created 2)))))))
+
+(deftest session-create-accepts-empty-attachment-vector-test
+  (let [created (atom nil)]
+    (with-redefs [session/create-session (fn [dir meta attachments]
+                                           (reset! created [dir meta attachments])
+                                           {:id "sess-123"})]
+      (let [res (handlers/session-create-handler*
+                 {:wingman.frontend/sys {:config {:sessions-dir "x"}
+                                         :active-session (atom nil)}
+                  :params {"company" "Acme"
+                           "attachments" [{:filename "" :bytes (byte-array 0)}]}})]
+        (is (= 303 (:status res)))
+        (is (= [] (nth @created 2)))))))
+
+(deftest session-create-mixed-empty-and-real-attachment-test
+  (let [created (atom nil)]
+    (with-redefs [session/create-session (fn [dir meta attachments]
+                                           (reset! created [dir meta attachments])
+                                           {:id "sess-123"})]
+      (let [md-bytes (.getBytes "# hello")
+            res (handlers/session-create-handler*
+                 {:wingman.frontend/sys {:config {:sessions-dir "x"}
+                                         :active-session (atom nil)}
+                  :params {"company" "Acme"
+                           "attachments" [{:filename "notes.md" :bytes md-bytes}
+                                          {:filename "" :bytes (byte-array 0)}]}})]
+        (is (= 303 (:status res)))
+        (is (= 1 (count (nth @created 2))))
+        (is (= "notes.md" (:filename (first (nth @created 2)))))
+        (is (= md-bytes (:bytes (first (nth @created 2)))))))))
+
+(deftest new-session-handler-test
+  (let [res (handlers/new-session-handler {})]
+    (is (= 200 (:status res)))
+    (is (clojure.string/includes? (:body res) "Start a new interview session"))
+    (is (clojure.string/includes? (:body res) "enctype=\"multipart/form-data\""))))
 
 (deftest session-delete-handler-test
   (let [dir (temp-dir)]
@@ -83,6 +166,57 @@
             (is (= ["http://c:7778"] @stop-calls))
             (is (not (contains? @chat-pipelines id)))
             (is (not (contains? @audio-pipelines id))))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest session-clear-handler-test
+  (let [dir (temp-dir)]
+    (try
+      (let [id (:id (session/create-session dir))
+            cleared (atom [])
+            sys {:wingman.frontend/sys {:config {:sessions-dir dir}
+                                        :chat-pipelines (atom {})
+                                        :audio-pipelines (atom {})}}]
+        (with-redefs [pipelines/clear-session!
+                      (fn [_sys sid] (swap! cleared conj sid))]
+          (let [unknown (handlers/session-clear-handler (assoc sys :path-params {:id "no-such"}))
+                ok (handlers/session-clear-handler (assoc sys :path-params {:id id}))]
+            (is (= 404 (:status unknown)))
+            (is (= "unknown session" (:body unknown)))
+            (is (= 200 (:status ok)))
+            (is (= [id] @cleared)))))
+      (finally
+        (delete-recursively! dir)))))
+
+(deftest session-context-handler-test
+  (let [dir (temp-dir)]
+    (try
+      (let [id (:id (session/create-session dir {:company "Acme" :role "Dev" :topic "Clojure" :notes "notes"}))
+            updated (atom [])
+            sys {:wingman.frontend/sys {:config {:sessions-dir dir}
+                                        :chat-pipelines (atom {})
+                                        :audio-pipelines (atom {})}}]
+        (with-redefs [pipelines/update-context!
+                      (fn [_sys sid ctx-data] (swap! updated conj [sid ctx-data]))]
+          (let [unknown (handlers/session-context-handler (assoc sys :path-params {:id "no-such"}))
+                ok (handlers/session-context-handler (assoc sys :path-params {:id id}
+                                                            :params {"role" "Senior Dev"
+                                                                     "topic" "Java"
+                                                                     "notes" "new notes"}))
+                notes-too-long (handlers/session-context-handler (assoc sys :path-params {:id id}
+                                                                        :params {"notes" (apply str (repeat 4001 "x"))}))
+                ignores-company (handlers/session-context-handler (assoc sys :path-params {:id id}
+                                                                         :params {"company" "EvilCorp"
+                                                                                  "role" "Lead"}))]
+            (is (= 404 (:status unknown)))
+            (is (= "unknown session" (:body unknown)))
+            (is (= 400 (:status notes-too-long)))
+            (is (= "notes must be 4000 characters or fewer" (:body notes-too-long)))
+            (is (= 303 (:status ok)))
+            (is (= (str "/session/" id) (get-in ok [:headers "Location"])))
+            (is (= [id {:role "Senior Dev" :topic "Java" :notes "new notes"}] (first @updated)))
+            (is (= 303 (:status ignores-company)))
+            (is (= [id {:role "Lead" :topic nil :notes nil}] (second @updated))))))
       (finally
         (delete-recursively! dir)))))
 
@@ -211,10 +345,20 @@
     (fn [base dir _sys]
       (let [id (:id (session/create-session dir))
             _ (session/append-event dir id {:type :transcript :speaker :candidate :text "history seed" :ts "00:01"})
-            res @(http/get (str base "/session/" id))]
+            _ (session/append-event dir id {:type :response :text "assistant reply"})
+            res @(http/get (str base "/session/" id))
+            body (body-str res)
+            transcript-html (section-between body "sse-swap=\"transcript\" hx-swap=\"none\">" "</main>")
+            assistant-html (section-between body "sse-swap=\"assistant\" hx-swap=\"beforeend\">" "<form id=\"chat-form\"")]
         (is (= 200 (:status res)))
-        (is (str/includes? (body-str res) "history seed"))
-        (is (str/includes? (body-str res) "utterance-card"))))))
+        (is (= 1 (occurrences body "history seed")))
+        (is (str/includes? transcript-html "history seed"))
+        (is (str/includes? transcript-html "utterance-card"))
+        (is (not (str/includes? transcript-html "assistant reply")))
+        (is (= 1 (occurrences body "assistant reply")))
+        (is (str/includes? assistant-html "assistant reply"))
+        (is (not (str/includes? assistant-html "history seed")))
+        (is (not (str/includes? assistant-html "utterance-card")))))))
 
 (deftest chat-contract-test
   (with-server {}

@@ -5,14 +5,24 @@
             [clojure.string :as str])
   (:gen-class))
 
+(defn- continuation-token? [token]
+  (boolean (re-matches #"^\d+(=.*)?$" token)))
+
 (defn env-device-names [env-val]
-  (->> (str/split (or env-val "") #",")
-       (map str/trim)
-       (remove str/blank?)
-       (mapv (fn [entry]
-               (if-let [[_ name speaker] (re-matches #"(?i)^(.+?)=(candidate|interviewer)$" entry)]
-                 {:name name :speaker (keyword (str/lower-case speaker))}
-                 {:name entry :speaker nil})))))
+  (let [tokens (->> (str/split (or env-val "") #",")
+                    (map str/trim)
+                    (remove str/blank?))
+        entries (reduce (fn [acc token]
+                          (if (and (seq acc) (continuation-token? token))
+                            (conj (pop acc) (str (peek acc) "," token))
+                            (conj acc token)))
+                        []
+                        tokens)]
+    (mapv (fn [entry]
+            (if-let [[_ name speaker] (re-matches #"(?i)^(.+?)=(candidate|interviewer)$" entry)]
+              {:name name :speaker (keyword (str/lower-case speaker))}
+              {:name entry :speaker nil}))
+          entries)))
 
 (defn parse-selection-line [devices line]
   (if (str/blank? line)
