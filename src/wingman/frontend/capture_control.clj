@@ -34,12 +34,20 @@
 (defn list-sinks []
   (when-not (audio/mac?)
     (try
-      (let [proc (-> (ProcessBuilder. ["pactl" "list" "sinks"]) .start)
-            output (slurp (.getInputStream proc))]
-        (keep (fn [{:keys [name description]}]
-                (when (and name (not (str/includes? (str/lower-case name) "monitor")))
-                  {:name name :description (or description name)}))
-              (parse-pactl-sinks output)))
+      (let [proc (-> (ProcessBuilder. ^java.util.List ["pactl" "list" "sinks"])
+                     (.redirectErrorStream true)
+                     .start)
+            reader-future (future (slurp (.getInputStream proc)))]
+        (if (.waitFor proc 3 java.util.concurrent.TimeUnit/SECONDS)
+          (keep (fn [{:keys [name description]}]
+                  (let [lname (str/lower-case (or name ""))]
+                    (when (and name
+                               (not (str/includes? lname "monitor"))
+                               (not (str/includes? lname "aloop"))
+                               (not (str/includes? lname "loopback")))
+                      {:name name :description (or description name)})))
+                (parse-pactl-sinks @reader-future))
+          (do (.destroy proc) nil)))
       (catch Exception _ []))))
 
 (defn update-loopback! [sink-name]

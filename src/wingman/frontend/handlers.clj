@@ -52,7 +52,7 @@
    :headers {"Content-Type" "text/html"
              "Cache-Control" "no-store, no-cache, must-revalidate"}
    :body (-> (app-html)
-             (str/replace "hx-ext=\"sse\" sse-connect=\"/events\"" "")
+             (str/replace "hx-ext=\"sse\" data-sse-url=\"/events\"" "data-sse-url=\"\"")
              (str/replace "SESSION_ID" "NONE")
              (str/replace "<!--CONTEXT_EDITOR-->" "")
              (inject-scripts (str "<script>" mute-toggle-js "</script>" "<script>" pause-toggle-js "</script>")))})
@@ -284,10 +284,10 @@
          :body (-> (app-html)
                    (str/replace "<!--CONTEXT_HEADER-->" (str (renderer/session-header-fragment ctx)))
                    (str/replace "<!--CONTEXT_EDITOR-->" (str (renderer/context-editor-fragment id ctx)))
-                   (str/replace "sse-connect=\"/events\"" (str "sse-connect=\"/api/session/" id "/sse\""))
+                   (str/replace "data-sse-url=\"/events\"" (str "sse-connect=\"/api/session/" id "/sse\""))
                    (str/replace "/api/session/SESSION_ID/chat" (str "/api/session/" id "/chat"))
-                   (str/replace "sse-swap=\"transcript\" hx-swap=\"none\"></div>" (str "sse-swap=\"transcript\" hx-swap=\"none\">" transcript-history "</div>"))
-                   (str/replace "sse-swap=\"assistant\" hx-swap=\"beforeend\"></div>" (str "sse-swap=\"assistant\" hx-swap=\"beforeend\">" assistant-history "</div>"))
+                   (str/replace "id=\"transcript-list\" class=\"flex-1 overflow-y-auto p-4 space-y-3\" sse-swap=\"transcript\" hx-swap=\"beforeend\"></div>" (str "id=\"transcript-list\" class=\"flex-1 overflow-y-auto p-4 space-y-3\" sse-swap=\"transcript\" hx-swap=\"beforeend\">" transcript-history "</div>"))
+                   (str/replace "<div id=\"assistant-output\" class=\"flex-1 overflow-y-auto p-4\" sse-swap=\"assistant\" hx-swap=\"beforeend\"></div>" (str "<div id=\"assistant-output\" class=\"flex-1 overflow-y-auto p-4\" sse-swap=\"assistant\" hx-swap=\"beforeend\">" assistant-history "</div>"))
                    (inject-scripts (str "<script>" mute-toggle-js "</script>"
                                         "<script>" pause-toggle-js "</script>"
                                         "<script>" (clear-js id) "</script>"

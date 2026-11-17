@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Wingman Interview</title>
-<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+<script src="https://unpkg.com/htmx.org@2.0.11"></script>
 <script src="https://unpkg.com/htmx-ext-sse@2.2.4/sse.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -39,7 +39,7 @@ window.renderAssistantMarkdown = function(root){
 </script>
 </head>
 <body class="h-screen flex flex-col bg-slate-100 text-slate-800"
-      hx-ext="sse" sse-connect="/events">
+      hx-ext="sse" data-sse-url="/events">
 
 <div class="flex flex-1 min-h-0">
 
@@ -57,13 +57,12 @@ window.renderAssistantMarkdown = function(root){
     <!--CONTEXT_HEADER-->
     <main id="transcript-panel" class="h-[30%] min-h-0 flex-none flex flex-col bg-white" data-panel="transcript">
       <div class="px-4 py-3 border-b border-slate-200 text-sm font-semibold">Transcript</div>
-      <div class="flex-1 overflow-y-auto p-4 space-y-3" sse-swap="transcript" hx-swap="none"></div>
+      <div id="transcript-list" class="flex-1 overflow-y-auto p-4 space-y-3" sse-swap="transcript" hx-swap="beforeend"></div>
     </main>
 
     <aside id="assistant-panel" class="flex-1 min-h-0 flex flex-col bg-slate-50 border-t border-slate-200" data-panel="assistant">
       <div class="px-4 py-3 text-sm font-semibold border-b border-slate-200">Assistant</div>
-      <div id="assistant-output" class="flex-1 overflow-y-auto p-4"
-           sse-swap="assistant" hx-swap="beforeend"></div>
+      <div id="assistant-output" class="flex-1 overflow-y-auto p-4" sse-swap="assistant" hx-swap="beforeend"></div>
       <form id="chat-form" class="p-3 border-t border-slate-200 flex gap-2"
             hx-post="/api/session/SESSION_ID/chat" hx-swap="none"
             hx-on::after-request="this.reset()">
@@ -146,7 +145,7 @@ window.renderAssistantMarkdown = function(root){
 (function(){
   document.body.addEventListener('htmx:sseMessage', function(e){
     if (e.detail && e.detail.type === 'clear') {
-      var tc = document.querySelector('[sse-swap="transcript"]');
+      var tc = document.getElementById('transcript-list');
       if (tc) tc.innerHTML = '';
       var ao = document.getElementById('assistant-output');
       if (ao) ao.innerHTML = '';

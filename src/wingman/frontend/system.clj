@@ -39,6 +39,7 @@
 
 (defn start-system [system]
   (start-capture-poller! system)
+  (sse/start-keepalive! (:sse-registry system))
   (assoc system :server
          (server/start! {:port (get-in system [:config :port]) :sys system})))
 

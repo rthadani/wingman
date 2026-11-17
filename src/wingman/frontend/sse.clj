@@ -39,3 +39,22 @@
         (catch Exception _
           (unregister-client registry session-id client)
           (http-kit/close client))))))
+
+(defn start-keepalive!
+  "Sends a comment ping to all open SSE connections every 20 seconds so the
+  browser and any proxies don't close idle connections."
+  [registry]
+  (doto (Thread.
+         (fn []
+           (while true
+             (Thread/sleep 20000)
+             (doseq [[session-id clients] @registry
+                     client clients]
+               (try
+                 (http-kit/send! client ": ping\n\n" false)
+                 (catch Exception _
+                   (unregister-client registry session-id client)
+                   (http-kit/close client))))))
+         "sse-keepalive")
+    (.setDaemon true)
+    (.start)))

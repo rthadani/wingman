@@ -65,15 +65,20 @@
     devices))
 
 (defn- override-candidate [devices mic-device]
-  (mapv (fn [{:keys [speaker] :as d}]
-          (if (= :candidate speaker)
-            (if (= "default" (str/lower-case (str/trim (or mic-device ""))))
-              {:mixer nil :speaker :candidate}
-              (if-let [m (audio/find-mixer mic-device)]
-                {:mixer m :speaker :candidate}
-                d))
-            d))
-        devices))
+  (let [t (str/lower-case (str/trim (or mic-device "")))]
+    (mapv (fn [{:keys [speaker] :as d}]
+            (if (= :candidate speaker)
+              (cond
+                (= "default" t)
+                {:mixer nil :speaker :candidate}
+                (and (not (audio/mac?)) (re-find #"^(plughw|hw):" t))
+                d
+                :else
+                (if-let [m (audio/find-mixer mic-device)]
+                  {:mixer m :speaker :candidate}
+                  d))
+              d))
+          devices)))
 
 (defn start-capture! [state agent-url session-id & [mic-device]]
   (swap! state

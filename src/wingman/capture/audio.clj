@@ -28,23 +28,22 @@
     (.array bb)))
 
 (def force-flush-buffers 300)
-(def min-speech-buffers 50)
 
-(defn step [acc silence? buf cap]
+(defn step [acc silence? buf cap min-buffers]
   (cond
-    (and silence? (>= (count acc) min-speech-buffers))
+    (and silence? (>= (count acc) min-buffers))
     {:flush (into [] cat acc) :acc []}
     silence?
     {:flush nil :acc acc}
     (>= (count acc) cap) {:flush (into [] cat acc) :acc [(aclone buf)]}
     :else {:flush nil :acc (conj acc (aclone buf))}))
 
-(defn utterance-processor [detector send-fn]
+(defn utterance-processor [detector send-fn min-buffers]
   (let [acc (atom [])]
     (reify AudioProcessor
       (process [_ event]
         (let [buf (.getFloatBuffer ^AudioEvent event)
-              {:keys [flush] acc' :acc} (step @acc (.isSilence ^SilenceDetector detector buf) buf force-flush-buffers)]
+              {:keys [flush] acc' :acc} (step @acc (.isSilence ^SilenceDetector detector buf) buf force-flush-buffers min-buffers)]
           (when flush
             (send-fn (floats->pcm-s16le flush)))
           (reset! acc acc'))
@@ -67,10 +66,13 @@
 (defn list-devices []
   (into []
         (keep (fn [mi]
-                (let [mixer (AudioSystem/getMixer mi)]
-                  (when (some #(.isLineSupported mixer (DataLine$Info. TargetDataLine %)) capture-formats)
-                    {:name (.getName mi)
-                     :description (.getDescription mi)}))))
+                (let [lname (str/lower-case (.getName mi))]
+                  (when (and (not (str/includes? lname "loopback"))
+                             (not (str/includes? lname "aloop")))
+                    (let [mixer (AudioSystem/getMixer mi)]
+                      (when (seq (.getTargetLineInfo mixer))
+                        {:name (.getName mi)
+                         :description (.getDescription mi)}))))))
         (AudioSystem/getMixerInfo)))
 
 (defn- mixer-infos []
@@ -82,14 +84,9 @@
 (defn- supports-target-line? [mi]
   (.isLineSupported (mixer-for mi) (DataLine$Info. TargetDataLine target-format)))
 
-(defn find-mixer
-  "Returns the first Mixer matching name-or-desc. Rejects raw ALSA hw: device
-  strings on Linux to avoid exclusive TargetDataLine ownership."
-  [name-or-desc]
+(defn find-mixer [name-or-desc]
   (let [t (str/lower-case (str/trim (or name-or-desc "")))]
-    (when (and (not (str/blank? t))
-               (not (and (not (mac?))
-                         (re-find #"^(plughw|hw):" t))))
+    (when-not (str/blank? t)
       (or (some (fn [mi]
                   (when (and (supports-target-line? mi)
                              (or (= t (str/lower-case (.getName mi)))
@@ -183,7 +180,8 @@
 
 (defn dispatcher-for [send-fn {:keys [mixer speaker]}]
   (let [detector (SilenceDetector. (silence-threshold-db) true)
-        utterance (utterance-processor detector (logged-send-fn speaker send-fn))
+        min-buffers (if (= :candidate speaker) 10 50)
+        utterance (utterance-processor detector (logged-send-fn speaker send-fn) min-buffers)
         [dispatcher line] (if-let [[^TargetDataLine line ^AudioFormat fmt] (when mixer (open-mixer-line mixer))]
                             [(let [d (AudioDispatcher. (JVMAudioInputStream. (AudioInputStream. line)) 1024 0)]
                                (.addAudioProcessor d (source-converter fmt [detector utterance]))

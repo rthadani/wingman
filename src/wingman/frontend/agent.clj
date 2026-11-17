@@ -16,13 +16,13 @@
     text))
 
 (defn- emit-lines! [line-ch carry delta]
-  (let [s (str @carry delta)]
+  (let [s (str carry delta)]
     (if (str/includes? s "\n")
       (let [parts (str/split s #"\n" -1)]
         (doseq [l (butlast parts)]
           (async/>!! line-ch l))
-        (reset! carry (last parts)))
-      (reset! carry s))))
+        (last parts))
+      s)))
 
 (defn build-rpc-args
   [{:keys [provider model name context-dir pi-bin append-system-prompt home]}]
@@ -89,31 +89,32 @@
 (defn run-turn!
   [{:keys [out-ch] :as conn} prompt line-ch]
   (send-prompt! conn prompt)
-  (let [sb (StringBuilder.)
-        carry (atom "")]
-    (loop []
+  (let [sb (StringBuilder.)]
+    (loop [carry ""]
       (let [[ev ch] (async/alts!! [out-ch (async/timeout 90000)])]
         (cond
           (and (nil? ev) (not (identical? ch out-ch)))
-          (do (when (seq @carry) (async/>!! line-ch @carry))
+          (do (when (seq carry) (async/>!! line-ch carry))
               {:text (str sb) :timeout? true})
 
           (nil? ev)
-          (do (when (seq @carry) (async/>!! line-ch @carry))
+          (do (when (seq carry) (async/>!! line-ch carry))
               {:text (str sb) :closed? true})
 
           :else
-          (let [t (:type ev)]
-            (when (= "message_update" t)
-              (let [e (:assistantMessageEvent ev)]
-                (when (= "text_delta" (:type e))
-                  (let [d (str (:delta e))]
-                    (.append sb d)
-                    (emit-lines! line-ch carry d)))))
+          (let [t (:type ev)
+                carry (if (= "message_update" t)
+                        (let [e (:assistantMessageEvent ev)]
+                          (if (= "text_delta" (:type e))
+                            (let [d (str (:delta e))]
+                              (.append sb d)
+                              (emit-lines! line-ch carry d))
+                            carry))
+                        carry)]
             (if (= "agent_settled" t)
-              (do (when (seq @carry) (async/>!! line-ch @carry))
+              (do (when (seq carry) (async/>!! line-ch carry))
                   {:text (str sb)})
-              (recur))))))))
+              (recur carry))))))))
 
 (defn close-session! [{:keys [proc in]}]
   (try (.close ^java.io.Writer in) (catch Exception _))

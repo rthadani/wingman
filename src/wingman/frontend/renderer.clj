@@ -59,8 +59,7 @@
   [utterance]
   (h/html
    [:div {:class "utterance-card max-w-2xl rounded-lg border border-slate-200 shadow-sm p-3"
-          :data-utterance (str (:id utterance))
-          :hx-swap-oob "beforeend:#transcript-panel .space-y-3"}
+          :data-utterance (str (:id utterance))}
     [:div {:class "flex items-baseline justify-between mb-1"}
      [:span {:class (speaker-class (:speaker utterance))} (name (:speaker utterance))]
      [:span {:class "text-xs text-slate-400"} (:timestamp utterance)]]
