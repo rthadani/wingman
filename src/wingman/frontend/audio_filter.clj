@@ -113,8 +113,6 @@
     "thanks for watching"
     "please subscribe"
     "please like and subscribe"
-    "thank you"
-    "thanks"
     "you"
     "bye"
     "bye bye"

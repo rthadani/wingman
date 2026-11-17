@@ -24,8 +24,8 @@
         (prn-str {:type :session-created :id id})))
 
 (defn- loud-bytes []
-  "A loud PCM16 chunk that passes the -50 dBFS energy gate."
-  (byte-array [0xFF 0x7F 0x00 0x80 0xFF 0x7F 0x00 0x80]))
+  "A loud PCM16 chunk (6400 bytes) that passes the energy gate and minimum size check."
+  (byte-array (take 6400 (cycle [0xFF 0x7F 0x00 0x80]))))
 
 (defn- quiet-bytes []
   "Silence that should be dropped by the energy gate."

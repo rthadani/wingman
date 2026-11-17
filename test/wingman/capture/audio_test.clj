@@ -30,25 +30,25 @@
 
 (deftest step-accumulates-during-speech-test
   (let [b (float-array [0.5 0.25])
-        r (audio/step [] false b 470)]
+        r (audio/step [] false b 470 10)]
     (is (nil? (:flush r)))
     (is (= 1 (count (:acc r))))
     (is (not (identical? b (first (:acc r)))))))
 
 (deftest step-flushes-on-silence-edge-test
   (let [b (float-array [0.5 0.25])
-        r (audio/step [(aclone b)] true b 470)]
+        r (audio/step [(aclone b)] true b 470 1)]
     (is (= [0.5 0.25] (:flush r)))
     (is (= [] (:acc r)))))
 
 (deftest step-noop-when-silent-and-empty-test
-  (let [r (audio/step [] true (float-array [0.0]) 470)]
+  (let [r (audio/step [] true (float-array [0.0]) 470 10)]
     (is (nil? (:flush r)))
     (is (= [] (:acc r)))))
 
 (deftest step-force-flushes-at-cap-test
   (let [b (float-array [0.5 0.25])
-        r (audio/step (vec (repeat 3 (aclone b))) false b 3)]
+        r (audio/step (vec (repeat 3 (aclone b))) false b 3 10)]
     (is (= [0.5 0.25 0.5 0.25 0.5 0.25] (:flush r)))
     (is (= 1 (count (:acc r))))))
 
@@ -60,7 +60,7 @@
 (deftest utterance-processor-state-machine-test
   (let [detector (SilenceDetector. -25.0 true)
         sent (atom [])
-        p (audio/utterance-processor detector (fn [pcm] (swap! sent conj pcm)))]
+        p (audio/utterance-processor detector (fn [pcm] (swap! sent conj pcm)) 2)]
     (is (true? (.process p (audio-event 128 0.9))))
     (is (true? (.process p (audio-event 128 0.9))))
     (is (empty? @sent))

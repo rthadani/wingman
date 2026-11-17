@@ -47,7 +47,7 @@
     (with-redefs [session/create-session (fn [dir meta attachments]
                                            (reset! created [dir meta attachments])
                                            {:id "sess-123"})
-                  capture-control/start! (fn [url id] (swap! calls conj [url id]))]
+                  capture-control/start! (fn [url id & _] (swap! calls conj [url id]))]
       (let [active (atom nil)
             req {:wingman.frontend/sys {:config {:sessions-dir "x" :capture-url "http://c:7778"}
                                         :active-session active}
@@ -348,7 +348,7 @@
             _ (session/append-event dir id {:type :response :text "assistant reply"})
             res @(http/get (str base "/session/" id))
             body (body-str res)
-            transcript-html (section-between body "sse-swap=\"transcript\" hx-swap=\"none\">" "</main>")
+            transcript-html (section-between body "sse-swap=\"transcript\" hx-swap=\"beforeend\">" "</main>")
             assistant-html (section-between body "sse-swap=\"assistant\" hx-swap=\"beforeend\">" "<form id=\"chat-form\"")]
         (is (= 200 (:status res)))
         (is (= 1 (occurrences body "history seed")))
@@ -466,17 +466,17 @@
     (try
       (let [id (:id (session/create-session dir))]
         (testing "binary frame routes raw pcm into audio pipeline"
-          (let [chunk (promise)]
+          (let [chunk (promise)
+                frame (byte-array (into [0] (take 6400 (cycle [0xFF 0x7F 0x00 0x80]))))]
             (with-redefs [whisper/whisper-available? (constantly true)
                           whisper/transcribe-pcm
                           (fn [bytes]
                             (deliver chunk bytes)
                             {:text "" :segments []})]
-              (handlers/handle-ws-frame sys id (byte-array [0 1 2 3 4]))
+              (handlers/handle-ws-frame sys id frame)
               (let [delivered (deref chunk 2000 nil)]
                 (is (some? delivered))
-                (is (= 4 (count delivered)))
-                (is (= (vec (byte-array [1 2 3 4])) (vec delivered)))))))
+                (is (= 6400 (count delivered)))))))
         (testing "clipboard text frame routes payload into chat pipeline"
           (let [msg (promise)]
             (with-redefs [agent-loop/start-session! (fn [_opts] {:context-dir "x" :conn {}})

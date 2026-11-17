@@ -40,9 +40,10 @@
 
 (deftest transcript-fragment-test
   (let [out (render (renderer/transcript-fragment sample-utterance))]
-    (is (str/includes? out "hx-swap-oob"))
+    (is (str/includes? out "utterance-card"))
     (is (str/includes? out "data-utterance=\"1\""))
-    (is (str/includes? out "Can you walk me through how your team currently handles onboarding?"))))
+    (is (str/includes? out "Can you walk me through how your team currently handles onboarding?"))
+    (is (not (str/includes? out "hx-swap-oob")))))
 
 (deftest response-fragment-final-test
   (let [out (render (renderer/response-fragment "Noted." true))]

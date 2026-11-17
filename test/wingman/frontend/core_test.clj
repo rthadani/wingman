@@ -34,7 +34,7 @@
       (is (fn? (:server sys)))
       (let [base (str "http://localhost:" port)
             sessions (deref (http/get (str base "/sessions")))
-            created (with-redefs [capture-control/start! (fn [_ _] nil)]
+            created (with-redefs [capture-control/start! (fn [_ _ & _] nil)]
                       (deref (http/post (str base "/api/session")
                                         {:form-params {"company" "Acme"}
                                          :follow-redirects false})))
