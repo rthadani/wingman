@@ -104,7 +104,7 @@
    ctx-data are changed. Callers must hold the per-session lock."
   [sessions-dir id ctx-data]
   (let [events (read-events sessions-dir id)
-        updates (select-keys ctx-data [:role :topic :notes])
+        updates (select-keys ctx-data [:role :topic :notes :mic-device :interviewer-sink])
         updated (mapv (fn [ev]
                         (if (= :session-created (:type ev))
                           (update ev :meta merge updates)

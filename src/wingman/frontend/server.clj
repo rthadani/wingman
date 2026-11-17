@@ -13,6 +13,7 @@
   [["/" {:get {:handler handlers/home-handler}}]
    ["/new" {:get {:handler handlers/new-session-handler}}]
    ["/api/session" {:post {:handler handlers/session-create-handler}}]
+   ["/api/devices" {:get {:handler handlers/devices-handler}}]
    ["/api/capture/stop" {:post {:handler handlers/capture-stop-handler}}]
    ["/api/capture/mute" {:post {:handler handlers/capture-mute-handler}}]
    ["/api/capture/unmute" {:post {:handler handlers/capture-unmute-handler}}]

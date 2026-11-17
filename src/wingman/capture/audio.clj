@@ -11,6 +11,9 @@
 (defn env [var-name]
   (System/getenv var-name))
 
+(defn mac? []
+  (str/starts-with? (str/lower-case (System/getProperty "os.name" "")) "mac"))
+
 (defn silence-threshold-db []
   (or (some-> (env "SILENCE_THRESHOLD_DB") str/trim not-empty parse-double)
       -25.0))
@@ -24,13 +27,15 @@
         (.putShort bb (short (* 32767.0 v)))))
     (.array bb)))
 
-(def force-flush-buffers 470)
+(def force-flush-buffers 300)
+(def min-speech-buffers 50)
 
 (defn step [acc silence? buf cap]
   (cond
-    silence? (if (seq acc)
-               {:flush (into [] cat acc) :acc []}
-               {:flush nil :acc acc})
+    (and silence? (>= (count acc) min-speech-buffers))
+    {:flush (into [] cat acc) :acc []}
+    silence?
+    {:flush nil :acc acc}
     (>= (count acc) cap) {:flush (into [] cat acc) :acc [(aclone buf)]}
     :else {:flush nil :acc (conj acc (aclone buf))}))
 
@@ -77,9 +82,14 @@
 (defn- supports-target-line? [mi]
   (.isLineSupported (mixer-for mi) (DataLine$Info. TargetDataLine target-format)))
 
-(defn find-mixer [name-or-desc]
+(defn find-mixer
+  "Returns the first Mixer matching name-or-desc. Rejects raw ALSA hw: device
+  strings on Linux to avoid exclusive TargetDataLine ownership."
+  [name-or-desc]
   (let [t (str/lower-case (str/trim (or name-or-desc "")))]
-    (when-not (str/blank? t)
+    (when (and (not (str/blank? t))
+               (not (and (not (mac?))
+                         (re-find #"^(plughw|hw):" t))))
       (or (some (fn [mi]
                   (when (and (supports-target-line? mi)
                              (or (= t (str/lower-case (.getName mi)))

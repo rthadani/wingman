@@ -112,7 +112,28 @@
   #{"thank you for watching"
     "thanks for watching"
     "please subscribe"
-    "please like and subscribe"})
+    "please like and subscribe"
+    "thank you"
+    "thanks"
+    "you"
+    "bye"
+    "bye bye"
+    "goodbye"
+    "see you next time"
+    "see you later"
+    "have a good one"
+    "have a great day"
+    "take care"
+    "i'll see you in the next video"
+    "see you in the next one"
+    "like and subscribe"
+    "don't forget to subscribe"
+    "www"
+    "..."
+    "subtitle by"
+    "subtitles by"
+    "captioned by"
+    "transcribed by"})
 
 (defn- denylist-match?
   [text]

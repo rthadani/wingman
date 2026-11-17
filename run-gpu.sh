@@ -6,7 +6,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-export WHISPER_CPP_DIR="${WHISPER_CPP_DIR:-$HOME/whisper-pinned}"
+export WHISPER_CPP_DIR="${WHISPER_CPP_DIR:-$HOME/Projects/whisper-pinned}"
 BUILD="$WHISPER_CPP_DIR/build"
 
 # WHISPER_MODEL_FILE overrides the model; WHISPER_MODEL is ignored on purpose.

@@ -13,7 +13,7 @@ stop_all() {
     pid=$(port_pid "$port" || true)
     [ -n "${pid:-}" ] && kill "$pid" 2>/dev/null || true
   done
-  systemctl --user stop wingman-pw-loopback wingman-pw-loopback-mic 2>/dev/null || true
+  systemctl --user stop wingman-pw-loopback 2>/dev/null || true
   echo "stopped"
 }
 
@@ -35,16 +35,18 @@ export WHISPER_MODEL="${WHISPER_MODEL_FILE:-$PWD/models/ggml-medium.en.bin}"
 echo "whisper model: $WHISPER_MODEL"
 export PI_PROVIDER="${PI_PROVIDER:-failover}"
 export PI_MODEL="${PI_MODEL:-kimi-k2.7-code}"
-export CAPTURE_DEVICES="${CAPTURE_DEVICES:-plughw:4,0=candidate,plughw:3,0=interviewer}"
-export SILENCE_THRESHOLD_DB="${SILENCE_THRESHOLD_DB:--50}"
+export CAPTURE_DEVICES="${CAPTURE_DEVICES:-default=candidate,plughw:0,0=interviewer}"
+export SILENCE_THRESHOLD_DB="${SILENCE_THRESHOLD_DB:--38}"
+export MIN_AUDIO_DBFS="${MIN_AUDIO_DBFS:--38}"
+# export DISABLE_AI=true  # uncomment to capture/transcribe without spending any tokens
 
 if [ ! -f "$WHISPER_MODEL" ]; then
   echo "warning: whisper model not found at $WHISPER_MODEL (speech will not transcribe)" >&2
 fi
 
 # ----- audio mirrors (systemd user services) -----
-systemctl --user start wingman-pw-loopback wingman-pw-loopback-mic 2>/dev/null || \
-  echo "warning: audio mirror services unavailable; interviewer/candidate audio will not flow" >&2
+systemctl --user start wingman-pw-loopback 2>/dev/null || \
+  echo "warning: interviewer audio mirror unavailable; interviewer voice will not be captured" >&2
 
 # ----- restart app processes -----
 for port in 7777 7778; do

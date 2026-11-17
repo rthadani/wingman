@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [ring.middleware.multipart-params :as mp]
             [ring.middleware.multipart-params.byte-array :as ba]
+            [wingman.capture.audio :as audio]
             [wingman.frontend.capture-control :as capture-control]
             [wingman.frontend.pipelines :as pipelines]
             [wingman.frontend.renderer :as renderer]
@@ -27,6 +28,9 @@
 (defn- edit-context-js
   []
   "(function(){var b=document.getElementById('edit-context');var p=document.getElementById('context-editor');if(!b||!p){return;}b.addEventListener('click',function(){p.classList.toggle('hidden');});var c=document.getElementById('cancel-context');if(c){c.addEventListener('click',function(){p.classList.add('hidden');});}})();")
+
+(defn- device-select-js []
+  "(function(){fetch('/api/devices').then(function(r){return r.json();}).then(function(d){if(d.mac){var w=document.getElementById('select-interviewer-sink');if(w){var p=w.closest('div.interviewer-sink-wrap');if(p){p.style.display='none';}}}['select-mic-device','select-interviewer-sink'].forEach(function(id){var sel=document.getElementById(id);if(!sel){return;}var items=id==='select-mic-device'?d.inputs:d.outputs;items.forEach(function(dev){var opt=document.createElement('option');opt.value=dev.name;opt.textContent=dev.description||dev.name;sel.appendChild(opt);});var cur=sel.getAttribute('data-current');if(cur){sel.value=cur;}});}).catch(function(){});})();")
 
 (defn- app-html []
   (slurp (io/resource "public/app.html")))
@@ -90,22 +94,37 @@
             :notes (get params "notes")
             :attachments attachments}})))
 
+(defn devices-handler [_req]
+  (let [inputs (into [{:name "default" :description "Default microphone"}]
+                     (audio/list-devices))
+        outputs (or (capture-control/list-sinks) [])]
+    {:status 200
+     :headers {"Content-Type" "application/json"}
+     :body (json/generate-string {:inputs inputs :outputs outputs :mac (audio/mac?)})}))
+
 (defn session-create-handler* [{:keys [wingman.frontend/sys] :as req}]
   (let [params (:params req)
         attachments (normalize-attachments (get params "attachments"))
-        validation (validate-create-session params attachments)]
+        validation (validate-create-session params attachments)
+        mic-device (some-> (get params "mic-device") str str/trim not-empty)
+        interviewer-sink (some-> (get params "interviewer-sink") str str/trim not-empty)]
     (if-let [err (:error validation)]
       {:status 400 :body err}
       (let [{:keys [company role topic notes attachments]} (:ok validation)
             sessions-dir (get-in sys [:config :sessions-dir])
             ev (session/create-session sessions-dir
-                                       {:company company
-                                        :role role
-                                        :topic topic
-                                        :notes notes}
+                                       (cond-> {:company company
+                                                :role role
+                                                :topic topic
+                                                :notes notes}
+                                         mic-device (assoc :mic-device mic-device)
+                                         interviewer-sink (assoc :interviewer-sink interviewer-sink))
                                        attachments)
             id (:id ev)]
-        (capture-control/start! (get-in sys [:config :capture-url]) id)
+        (when interviewer-sink
+          (capture-control/update-loopback! interviewer-sink))
+        (capture-control/start! (get-in sys [:config :capture-url]) id
+                                (when mic-device {:mic-device mic-device}))
         (reset! (:active-session sys) id)
         {:status 303
          :headers {"Location" (str "/session/" id)}
@@ -180,11 +199,24 @@
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)
       {:status 404 :body "unknown session"}
-      (let [validation (validate-context-update (:params req))]
+      (let [params (:params req)
+            validation (validate-context-update params)
+            mic-device (some-> (get params "mic-device") str str/trim not-empty)
+            interviewer-sink (some-> (get params "interviewer-sink") str str/trim not-empty)]
         (if-let [err (:error validation)]
           {:status 400 :body err}
           (do
-            (pipelines/update-context! sys id (:ok validation))
+            (pipelines/update-context! sys id
+                                       (cond-> (:ok validation)
+                                         mic-device (assoc :mic-device mic-device)
+                                         interviewer-sink (assoc :interviewer-sink interviewer-sink)))
+            (when interviewer-sink
+              (capture-control/update-loopback! interviewer-sink))
+            (when (or mic-device interviewer-sink)
+              (capture-control/stop-sync! (get-in sys [:config :capture-url]))
+              (let [ctx (session/session-context (get-in sys [:config :sessions-dir]) id)]
+                (capture-control/start! (get-in sys [:config :capture-url]) id
+                                        (when (:mic-device ctx) {:mic-device (:mic-device ctx)}))))
             {:status 303
              :headers {"Location" (str "/session/" id)}
              :body ""}))))))
@@ -242,7 +274,10 @@
             assistant-history (apply str (keep renderer/history-fragment (filter #(= :response (:type %)) events)))
             ctx (session/session-context dir id)]
         (reset! (:active-session sys) id)
-        (capture-control/start! (get-in sys [:config :capture-url]) id)
+        (when-let [sink (:interviewer-sink ctx)]
+          (capture-control/update-loopback! sink))
+        (capture-control/start! (get-in sys [:config :capture-url]) id
+                                (when-let [mic (:mic-device ctx)] {:mic-device mic}))
         {:status 200
          :headers {"Content-Type" "text/html"
                    "Cache-Control" "no-store, no-cache, must-revalidate"}
@@ -256,7 +291,8 @@
                    (inject-scripts (str "<script>" mute-toggle-js "</script>"
                                         "<script>" pause-toggle-js "</script>"
                                         "<script>" (clear-js id) "</script>"
-                                        "<script>" (edit-context-js) "</script>")))}))))
+                                        "<script>" (edit-context-js) "</script>"
+                                        "<script>" (device-select-js) "</script>")))}))))
 (defn sse-handler [{:keys [wingman.frontend/sys] :as req}]
   (let [id (get-in req [:path-params :id])]
     (if-not (known-session? sys id)

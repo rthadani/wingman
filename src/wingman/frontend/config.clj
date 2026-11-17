@@ -21,7 +21,8 @@
           :provider (env "PI_PROVIDER")
           :model (env "PI_MODEL")
           :whisper-model (or (env "WHISPER_MODEL") "models/ggml-base.en.bin")
-          :min-audio-dbfs (or (parse-double-safe (env "MIN_AUDIO_DBFS")) -50.0)
+          :min-audio-dbfs (or (parse-double-safe (env "MIN_AUDIO_DBFS")) -38.0)
+          :disable-ai (= "true" (env "DISABLE_AI"))
           :sessions-dir "data/sessions"
           :tools-dir "tools"
           :archive-dir "data/archive"

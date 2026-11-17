@@ -72,8 +72,10 @@
           (when-not (paused? sys :voice)
             (try
               (let [cfg (:config sys)
-                    min-db (:min-audio-dbfs cfg -50.0)]
-                (if (audio-filter/loud-enough? bytes min-db)
+                    min-db (:min-audio-dbfs cfg -35.0)
+                    min-bytes 6400]
+                (if (and (>= (count bytes) min-bytes)
+                         (audio-filter/loud-enough? bytes min-db))
                   (when (whisper/whisper-available? (:whisper-model cfg))
                     (let [t (audio-filter/strip-annotations
                              (str/replace (:text (whisper/transcribe-pcm bytes)) "\n" " "))]
@@ -100,7 +102,7 @@
                               (async/offer! (ensure-chat-pipeline! sys session-id)
                                             {:source :audio :speaker speaker :text t :pre-appended? true})))))))
                   (binding [*out* *err*]
-                    (println "audio-drop" speaker "quiet" level))))
+                    (println "audio-drop" speaker "quiet-or-short" level (count bytes) "bytes"))))
               (catch Exception e
                 (binding [*out* *err*]
                   (println "audio chunk failed:" (.getMessage e)))))))
@@ -217,7 +219,8 @@
                     (recur fresh-ctx fresh-md))))
               :else
               (do
-                (when-not (paused? sys :text)
+                (when-not (or (paused? sys :text)
+                              (get-in sys [:config :disable-ai]))
                   (try
                     (when-not @session (reset! session (start-session-or-nil ctx-md)))
                     (when @session

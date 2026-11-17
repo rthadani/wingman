@@ -48,13 +48,34 @@
                                                                 [:candidate true]))]
                          (recur (rest remaining) assigned-candidate?' (conj acc {:name name :speaker speaker})))))
           resolved (keep (fn [{:keys [name speaker]}]
-                           (when-let [m (audio/find-mixer name)]
-                             {:mixer m :speaker speaker}))
+                           (if (= "default" (str/lower-case (str/trim (or name ""))))
+                             {:mixer nil :speaker speaker}
+                             (when-let [m (audio/find-mixer name)]
+                               {:mixer m :speaker speaker})))
                          assigned)]
       (if (seq resolved) resolved [{:mixer nil :speaker :candidate}]))
     [{:mixer nil :speaker :candidate}]))
 
-(defn start-capture! [state agent-url session-id]
+(defn- auto-add-blackhole [devices]
+  (if (and (audio/mac?)
+           (not (some #(= :interviewer (:speaker %)) devices)))
+    (if-let [m (audio/find-mixer "blackhole")]
+      (conj devices {:mixer m :speaker :interviewer})
+      devices)
+    devices))
+
+(defn- override-candidate [devices mic-device]
+  (mapv (fn [{:keys [speaker] :as d}]
+          (if (= :candidate speaker)
+            (if (= "default" (str/lower-case (str/trim (or mic-device ""))))
+              {:mixer nil :speaker :candidate}
+              (if-let [m (audio/find-mixer mic-device)]
+                {:mixer m :speaker :candidate}
+                d))
+            d))
+        devices))
+
+(defn start-capture! [state agent-url session-id & [mic-device]]
   (swap! state
          (fn [s]
            (if (= :capturing (:status s))
@@ -69,7 +90,9 @@
                    _ (doseq [n names :when (nil? (audio/find-mixer (:name n)))]
                        (binding [*out* *err*]
                          (println "audio device not found:" (:name n))))
-                   devices (resolve-devices names)
+                   devices (-> (resolve-devices names)
+                               (cond-> mic-device (override-candidate mic-device))
+                               auto-add-blackhole)
                    _ (transport/keep-connected! ws-atom ws-url client stop-ch)
                    sender (transport/start-sender! ws-atom)
                    dispatchers (audio/start-audio-capture!
@@ -133,11 +156,12 @@
   (let [body (some-> (slurp-body req) (json/parse-string true))
         agent-url (or (:agent-url body) (default-agent-url))
         session-id (or (:session-id body) (create-session! agent-url))
+        mic-device (some-> (:mic-device body) str str/trim not-empty)
         status (current-status state)]
     (when (and (= :capturing (:status status))
                (not= session-id (:session-id status)))
       (stop-capture! state))
-    (start-capture! state agent-url session-id)
+    (start-capture! state agent-url session-id mic-device)
     (json-response {:session-id session-id :status (:status (current-status state))})))
 
 (defn stop [state _req]

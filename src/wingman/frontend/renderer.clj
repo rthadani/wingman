@@ -112,8 +112,8 @@
       text])))
 
 (defn context-editor-fragment
-  "Form for editing role, topic and notes after the session has started."
-  [id {:keys [role topic notes]}]
+  "Form for editing role, topic, notes and audio devices after the session has started."
+  [id {:keys [role topic notes mic-device interviewer-sink]}]
   (h/html
    [:div {:id "context-editor" :class "hidden px-4 py-3 bg-white border-b border-slate-200"}
     [:form {:action (str "/api/session/" id "/context") :method "post" :class "space-y-3"}
@@ -130,6 +130,18 @@
       [:textarea {:name "notes" :rows 4
                   :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}
        (context-value notes)]]
+     [:div {:class "grid grid-cols-2 gap-3"}
+      [:div
+       [:label {:class "block text-sm font-medium"} "Microphone"]
+       [:select {:name "mic-device" :id "select-mic-device"
+                 :data-current (or mic-device "default")
+                 :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}]]
+      [:div {:class "interviewer-sink-wrap"}
+       [:label {:class "block text-sm font-medium"} "Call audio output"]
+       [:select {:name "interviewer-sink" :id "select-interviewer-sink"
+                 :data-current (or interviewer-sink "")
+                 :class "w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"}
+        [:option {:value ""} "Current"]]]]
      [:p {:class "text-xs text-amber-600"}
       "Saving restarts the assistant's conversation memory from the next reply."]
      [:div {:class "flex gap-2"}

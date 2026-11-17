@@ -30,6 +30,22 @@
         <textarea name="notes" rows="4"
                   class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border"></textarea>
       </div>
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium">Microphone</label>
+          <select name="mic-device" id="select-mic-device"
+                  class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border">
+            <option value="default">Default microphone</option>
+          </select>
+        </div>
+        <div class="interviewer-sink-wrap">
+          <label class="block text-sm font-medium">Call audio output</label>
+          <select name="interviewer-sink" id="select-interviewer-sink"
+                  class="w-full text-sm rounded border-slate-300 mt-1 px-2 py-1 border">
+            <option value="">Auto-detect</option>
+          </select>
+        </div>
+      </div>
       <div>
         <label class="block text-sm font-medium">Attachments (.md only)</label>
         <input type="file" name="attachments" multiple accept=".md"
@@ -45,5 +61,29 @@
       </div>
     </form>
   </main>
+<script>
+(function(){
+  fetch('/api/devices').then(function(r){return r.json();}).then(function(d){
+    if(d.mac){
+      var w = document.querySelector('.interviewer-sink-wrap');
+      if(w) w.style.display = 'none';
+    }
+    var micSel = document.getElementById('select-mic-device');
+    var sinkSel = document.getElementById('select-interviewer-sink');
+    d.inputs.forEach(function(dev){
+      var opt = document.createElement('option');
+      opt.value = dev.name;
+      opt.textContent = dev.description || dev.name;
+      micSel.appendChild(opt);
+    });
+    d.outputs.forEach(function(sink){
+      var opt = document.createElement('option');
+      opt.value = sink.name;
+      opt.textContent = sink.description || sink.name;
+      sinkSel.appendChild(opt);
+    });
+  }).catch(function(){});
+})();
+</script>
 </body>
 </html>
